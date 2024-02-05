@@ -5,17 +5,23 @@ build-backend = "poetry.masonry.api"
 [tool.poetry]
 name = "llmfoundry" # <----- Ensure it matches the name of your baseline directory containing all the source code
 version = "0.4.0"
-description = "LLM Foundry"
-license = "Apache-2.0"
-authors = ["MosaicML <team@mosaicml.com>"]
+description="LLM Foundry"
+license = "Apache-2.0 license"
+authors = ["MosaicML <team@mosaicml.com>, Lorenzo Sani <ls985@cam.ac.uk>"]
 readme = "README.md"
+# homepage = ""
+repository = "https://github.com/relogu/llm-foundry"
+# documentation = ""
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: Apache Software License",
+    "Operating System :: MacOS :: MacOS X",
     "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
@@ -31,7 +37,7 @@ classifiers = [
 
 
 [tool.poetry.dependencies]
-python = ">=3.9.17, <=3.11.0"  # don't change this
+python = ">=3.8.0, <3.11.0"  # don't change this
 hydra-core = "1.3.2" # don't change this
 types-protobuf = "^4.24.0.1"
 types-pyyaml = "^6.0.12.12"
@@ -41,7 +47,7 @@ wandb = "^0.15.12"
 pyarrow = "^13.0.0"
 multiprocess = "^0.70.15"
 nvsmi = "^0.4.2"
-transformers = ">=4.34.1,<4.35"
+transformers = ">=4.34.1, <4.35"
 cloudpickle = "^2.2.1"
 tqdm = "^4.66.1"
 psutil = "^5.9.5"
@@ -59,15 +65,15 @@ ipywidgets = "^8.1.1"
 ipython = "^8.17.2"
 torch = {url = "https://download.pytorch.org/whl/cu121_pypi_cudnn/torch-2.1.0%2Bcu121.with.pypi.cudnn-cp310-cp310-linux_x86_64.whl"}
 torchaudio = {url = "https://download.pytorch.org/whl/cu121/torchaudio-2.1.0%2Bcu121-cp310-cp310-linux_x86_64.whl"}
-torchvision = {url = "https://download.pytorch.org/whl/cu121/torchvision-0.16.0%2Bcu121-cp310-cp310-linux_x86_64.whl#sha256=5ea8bba7e82bf89467e7f8790499e3c20c97c7d0ccd778789ccdd2d84c647c9a"}
-composer = "^0.17.1"
-mosaicml = { version = ">=0.17,<0.18", extras = ["libcloud,wandb,mlflow,oci,gcs"] }
-accelerate = ">=0.20,<0.21"
-mosaicml-streaming = ">=0.7.1,<0.8"
-datasets = ">=2.14.5,<2.15"
+torchvision = {url = "https://download.pytorch.org/whl/cu121/torchvision-0.16.0%2Bcu121-cp310-cp310-linux_x86_64.whl"}
+gdown = "^4.7.1"
+mosaicml = {extras = ["gcs", "libcloud", "mlflow", "oci", "wandb"], version = ">=0.17, <0.18"}
+accelerate = ">=0.20, <0.21"
+mosaicml-streaming = ">=0.7.1, <0.8"
+datasets = ">=2.14.5, <2.15"
 fsspec = "2023.6.0"
 einops = "0.5.0"
-omegaconf = ">=2.2.3,<3"
+omegaconf = ">=2.2.3, <3"
 slack-sdk = "<4"
 mosaicml-cli = ">=0.3,<1"
 onnx = "1.14.0"
@@ -79,45 +85,35 @@ boto3 = ">=1.21.45,<2"
 huggingface-hub = ">=0.17.0,<1.0"
 beautifulsoup4 = ">=4.12.2,<5"  # required for model download utils
 tenacity = ">=8.2.3,<9"
-
-# ## For GPU flash attention
 # mosaicml-turbo = "0.0.4"
-# flash-attn = "1.0.9" # This fucks up, need to install it later
-# # PyPI does not support direct dependencies, so we remove this line before uploading from PyPI
+# flash-attn = "1.0.9"
+# flash-attn = "2.3.2"
+# PyPI does not support direct dependencies, so we remove this line before uploading from PyPI
 # xentropy-cuda-lib = { git = "https://github.com/HazyResearch/flash-attention.git", branch = "v1.0.9", subdirectory = "csrc/xentropy" }
-
-## For GPU flash attention v2
-mosaicml-turbo = "0.0.4"
-# flash-attn = "2.3.2" # This fucks up, need to install it later
-# # PyPI does not support direct dependencies, so we remove this line before uploading from PyPI
-# xentropy-cuda-lib = { git = "https://github.com/HazyResearch/flash-attention.git", branch = "v2.3.2", subdirectory = "csrc/xentropy" } # This fucks up, need to install it later
-
-## For peft
+# xentropy-cuda-lib = { git = "https://github.com/HazyResearch/flash-attention.git", branch = "v2.3.2", subdirectory = "csrc/xentropy" }
+mosaicml-turbo = "^0.0.5"
 loralib = "0.1.1"
 bitsandbytes = "0.39.1"
 peft = "0.4.0"
-llm-foundry = "^0.4.0"
-wheel = "^0.42.0"
-
 
 [tool.poetry.dev-dependencies]
-isort = "==5.11.5"
-black = { version = "==23.1.0", extras = ["jupyter"] }
-docformatter = "==1.5.1"
-mypy = "==0.961"
-pylint = "==2.8.2"
-flake8 = "==3.9.2"
-pytest-watch = "==4.2.0"
-ruff = "==0.0.272"
-types-requests = "==2.27.7"
+isort = "5.11.5"
+black = { version = "23.1.0", extras = ["jupyter"] }
+docformatter = "1.5.1"
+mypy = "0.981"
+pylint = "2.8.2"
+flake8 = "3.9.2"
+pytest-watch = "4.2.0"
+ruff = "0.0.272"
+types-requests = "2.27.7"
 yamlfix = "^1.14.0"
-pre-commit = ">=2.18.1,<3"
-pytest = ">=7.2.1,<8"
-pytest_codeblocks = ">=0.16.1,<0.17"
+pre-commit = ">=2.18.1, <3"
+pytest = ">=7.2.1, <8"
+pytest_codeblocks = ">=0.16.1, <0.17"
 pytest-cov = ">=4,<5"
 pyright = "1.1.256"
-toml = ">=0.10.2,<0.11"
-packaging = ">=21,<23"
+toml = ">=0.10.2, <0.11"
+packaging = ">=21, <24"
 hf_transfer = "0.1.3"
 
 [tool.isort]

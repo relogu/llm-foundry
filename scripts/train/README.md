@@ -45,12 +45,15 @@ You should see two folders once completed: `./my-copy-c4/train_small` and `./my-
 <!--pytest.mark.skip-->
 ```bash
 python ../data_prep/convert_dataset_hf.py --dataset c4 --data_subset en --out_root ./my-copy-c4 --splits train_small val_small --concat_tokens 2048 --tokenizer EleutherAI/gpt-neox-20b --eos_text '<|endoftext|>'
+poetry run python scripts/data_prep/convert_dataset_hf.py --dataset c4 --data_subset en --out_root /home/ls985/my-copy-c4 --splits train_small val_small --concat_tokens 2048 --tokenizer EleutherAI/gpt-neox-20b --eos_text '<|endoftext|>'
+poetry run python scripts/data_prep/convert_dataset_hf.py --dataset c4 --data_subset en --out_root /home/ls985/my-mds-copy-c4 --splits train_small val_small --concat_tokens 2048 --tokenizer EleutherAI/gpt-neox-20b --eos_text '<|endoftext|>' --compression zstd
 ```
 
 Alternatively, you can download the full `train` and `val` splits if you really want to train the model (i.e. not just profile the model). This will take 1-to-many hours depending on bandwidth, number of CPUs, etc. The final folder `./my-copy-c4/train` will be ~800GB so make sure you have space!
 <!--pytest.mark.skip-->
 ```bash
 python ../data_prep/convert_dataset_hf.py --dataset c4 --data_subset en --out_root ./my-copy-c4 --splits train val --concat_tokens 2048 --tokenizer EleutherAI/gpt-neox-20b --eos_text '<|endoftext|>'
+poetry run python scripts/data_prep/convert_dataset_hf.py --dataset c4 --data_subset en --out_root /local/scratch/c4 --splits train val --concat_tokens 2048 --tokenizer EleutherAI/gpt-neox-20b --eos_text '<|endoftext|>'
 ```
 
 For any of the above commands, you can also choose to compress the `.mds` files.
@@ -71,11 +74,20 @@ To verify that the dataloader works, run a quick test on your `val_small` split 
 # pass it into a PyTorch Dataloader, and iterate over it and print samples.
 # Since we only provide a local path, no streaming/copying takes place.
 python ../../llmfoundry/data/text_data.py --local_path ./my-copy-c4 --split val_small
+poetry run python llmfoundry/data/text_data.py --local_path /home/ls985/my-copy-c4 --split val_small
+poetry run python llmfoundry/data/text_data.py --local_path /home/ls985/my-mds-copy-c4 --split val_small
 
 # This will do the same thing, but stream data to {local} from {remote}.
 # The remote path can be a filesystem or object store URI.
 python ../../llmfoundry/data/text_data.py --local_path /tmp/cache-c4 --remote_path ./my-copy-c4  --split val_small # stream from filesystem, e.g. a slow NFS volume to fast local disk
 # python ../data_prep/text_data.py --local_path /tmp/cache-c4 --remote_path s3://my-bucket/my-copy-c4  # stream from object store
+
+
+export S3_ENDPOINT_URL='http://127.0.0.1:9000'
+export S3_ENDPOINT_URL='http://mauao.cl.cam.ac.uk:9000'
+poetry run python llmfoundry/data/text_data.py --local_path /tmp/cache-c4 --remote_path s3://c4-dataset  --split val
+poetry run python llmfoundry/data/text_data.py --local_path /tmp/cache-small-c4 --remote_path s3://small-c4-dataset  --split val_small
+
 ```
 
 ## How to start single and multi-node pretraining <a name="howtostartpretraining"></a>
@@ -97,6 +109,7 @@ If training on a single node, the `composer` launcher will autodetect the number
 <!--pytest.mark.skip-->
 ```bash
 composer train.py yamls/pretrain/mpt-125m.yaml train_loader.dataset.split=train_small eval_loader.dataset.split=val_small
+poetry run composer scripts/train/train.py scripts/train/yamls/pretrain/mpt-125m.yaml train_loader.dataset.split=train_small eval_loader.dataset.split=val_small data_local="/home/ls985/my-copy-c4"
 ```
 
 To train with high performance on multi-node clusters, the easiest way is with the [MosaicML platform](https://www.mosaicml.com/training) ;) Check out the `mcli/` folder for examples!
@@ -117,6 +130,29 @@ composer --world_size 16 --node_rank 0 --master_addr 0.0.0.0 --master_port 7501 
 
 # Node 1
 composer --world_size 16 --node_rank 1 --master_addr 0.0.0.0 --master_port 7501 train.py yamls/pretrain/mpt-125m.yaml
+
+export PATH=/usr/local/cuda-12.1/bin${PATH:+:${PATH}}
+export LD_LIBRARY_PATH=/usr/local/cuda-12.1/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
+
+poetry run composer --world_size 2 --node_rank 0 --master_addr 127.0.0.1 --master_port 6378 scripts/train/train.py scripts/train/yamls/pretrain/mpt-125m.yaml train_loader.dataset.split=train_small eval_loader.dataset.split=val_small data_local="/home/ls985/my-copy-c4" device_train_microbatch_size=20 save_interval=10ba save_num_checkpoints_to_keep=1 save_folder="/nfs-share/ls985/projects/llm-foundry/checkpoints"
+
+poetry run composer --world_size 2 --node_rank 0 --master_addr 127.0.0.1 --master_port 6378 scripts/train/train.py scripts/train/yamls/pretrain/mpt-125m.yaml train_loader.dataset.split=train_small eval_loader.dataset.split=val_small data_local="/home/ls985/my-mds-copy-c4" device_train_microbatch_size=20 save_interval=10ba save_num_checkpoints_to_keep=1 save_folder="/nfs-share/ls985/projects/llm-foundry/checkpoints"
+
+poetry run composer --world_size 2 --node_rank 0 --master_addr 127.0.0.1 --master_port 6378 scripts/train/train.py scripts/train/yamls/pretrain/mpt-125m.yaml train_loader.dataset.split=train_small eval_loader.dataset.split=val_small data_local="/home/ls985/my-copy-c4" precision="amp_fp16" device_train_microbatch_size=8 # 2080s don't support bfloat16 | 2080s have smaller VRAM
+
+poetry run composer --world_size 8 --node_rank 0 --master_addr 127.0.0.1 --master_port 6378 scripts/train/train.py scripts/train/yamls/pretrain/mpt-125m.yaml train_loader.dataset.split=train_small eval_loader.dataset.split=val_small data_local="/home/ls985/my-copy-c4"
+
+poetry run composer --world_size 8 --node_rank 0 --master_addr 127.0.0.1 --master_port 6378 scripts/train/train.py scripts/train/yamls/pretrain/mpt-125m.yaml train_loader.dataset.split=train_small eval_loader.dataset.split=val_small data_local="/tmp/small-c4" data_remote="s3://small-c4-dataset"
+
+poetry run composer --world_size 8 --node_rank 0 --master_addr 127.0.0.1 --master_port 6378 scripts/train/train.py scripts/train/yamls/pretrain/mpt-125m.yaml train_loader.dataset.split=train_small eval_loader.dataset.split=val_small data_local="/local/scratch/small-c4"
+
+
+poetry run composer --world_size 8 --node_rank 0 --master_addr 127.0.0.1 --master_port 6378 scripts/train/train.py scripts/train/yamls/pretrain/mpt-125m.yaml train_loader.dataset.split=train_small eval_loader.dataset.split=val_small data_local="/local/scratch/ls985/my-copy-c4"
+poetry run composer --world_size 8 --node_rank 0 --master_addr 127.0.0.1 --master_port 6378 scripts/train/train.py scripts/train/yamls/pretrain/mpt-1b.yaml train_loader.dataset.split=train eval_loader.dataset.split=val data_local="/local/scratch/c4" device_train_microbatch_size=auto model.attn_config.attn_impl=torch
+poetry run composer --world_size 8 --node_rank 0 --master_addr 127.0.0.1 --master_port 6378 scripts/train/train.py scripts/train/yamls/pretrain/mpt-3b.yaml train_loader.dataset.split=train eval_loader.dataset.split=val data_local="/local/scratch/c4" device_train_microbatch_size=auto # model.attn_config.attn_impl=torch
+poetry run composer --world_size 8 --node_rank 0 --master_addr 127.0.0.1 --master_port 6378 scripts/train/train.py scripts/train/yamls/pretrain/mpt-7b.yaml train_loader.dataset.split=train eval_loader.dataset.split=val data_local="/local/scratch/c4" device_train_microbatch_size=auto model.attn_config.attn_impl=torch
+poetry run composer --world_size 8 --node_rank 0 --master_addr 127.0.0.1 --master_port 6378 scripts/train/train.py scripts/train/yamls/pretrain/mpt-70b.yaml train_loader.dataset.split=train eval_loader.dataset.split=val data_local="/local/scratch/c4" device_train_microbatch_size=auto model.attn_config.attn_impl=torch
+
 
 ```
 
