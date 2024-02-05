@@ -398,8 +398,8 @@ def run_config(config: Tuple[str, int, int, str, str, int, str],
         {
             'integration_type': 'git_repo',
             'git_repo': 'mosaicml/llm-foundry',
-            'git_branch': 'main',
-            'pip_install': '.[gpu-flash2]',
+            'git_branch': 'v0.4.0',
+            'pip_install': '-e .[gpu]',
         },
         {
             'integration_type': 'wandb',
