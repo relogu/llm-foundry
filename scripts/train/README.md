@@ -131,16 +131,18 @@ composer --world_size 16 --node_rank 0 --master_addr 0.0.0.0 --master_port 7501 
 # Node 1
 composer --world_size 16 --node_rank 1 --master_addr 0.0.0.0 --master_port 7501 train.py yamls/pretrain/mpt-125m.yaml
 
+export S3_ENDPOINT_URL='http://mauao.cl.cam.ac.uk:9000'
 export PATH=/usr/local/cuda-12.1/bin${PATH:+:${PATH}}
 export LD_LIBRARY_PATH=/usr/local/cuda-12.1/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
+poetry run composer --world_size 2 --node_rank 0 --master_addr 127.0.0.1 --master_port 6378 scripts/train/train.py scripts/train/yamls/pretrain/mpt-125m.yaml save_folder="/nfs-share/ls985/projects/llm-foundry/checkpoints"
 
-poetry run composer --world_size 2 --node_rank 0 --master_addr 127.0.0.1 --master_port 6378 scripts/train/train.py scripts/train/yamls/pretrain/mpt-125m.yaml train_loader.dataset.split=train_small eval_loader.dataset.split=val_small data_local="/home/ls985/my-copy-c4" device_train_microbatch_size=20 save_interval=10ba save_num_checkpoints_to_keep=1 save_folder="/nfs-share/ls985/projects/llm-foundry/checkpoints"
+poetry run composer --world_size 2 --node_rank 0 --master_addr 127.0.0.1 --master_port 6378 scripts/train/train.py scripts/train/yamls/pretrain/mpt-125m.yaml train_loader.dataset.split=train_small eval_loader.dataset.split=val_small data_remote=s3://c4-dataset device_train_microbatch_size=20 save_interval=10ba save_num_checkpoints_to_keep=1 save_folder="/nfs-share/ls985/projects/llm-foundry/checkpoints"
 
-poetry run composer --world_size 2 --node_rank 0 --master_addr 127.0.0.1 --master_port 6378 scripts/train/train.py scripts/train/yamls/pretrain/mpt-125m.yaml train_loader.dataset.split=train_small eval_loader.dataset.split=val_small data_local="/home/ls985/my-mds-copy-c4" device_train_microbatch_size=20 save_interval=10ba save_num_checkpoints_to_keep=1 save_folder="/nfs-share/ls985/projects/llm-foundry/checkpoints"
+poetry run composer --world_size 2 --node_rank 0 --master_addr 127.0.0.1 --master_port 6378 scripts/train/train.py scripts/train/yamls/pretrain/mpt-125m.yaml train_loader.dataset.split=train_small eval_loader.dataset.split=val_small data_local=s3://c4-dataset device_train_microbatch_size=20 save_interval=10ba save_num_checkpoints_to_keep=1 save_folder="/nfs-share/ls985/projects/llm-foundry/checkpoints"
 
-poetry run composer --world_size 2 --node_rank 0 --master_addr 127.0.0.1 --master_port 6378 scripts/train/train.py scripts/train/yamls/pretrain/mpt-125m.yaml train_loader.dataset.split=train_small eval_loader.dataset.split=val_small data_local="/home/ls985/my-copy-c4" precision="amp_fp16" device_train_microbatch_size=8 # 2080s don't support bfloat16 | 2080s have smaller VRAM
+poetry run composer --world_size 2 --node_rank 0 --master_addr 127.0.0.1 --master_port 6378 scripts/train/train.py scripts/train/yamls/pretrain/mpt-125m.yaml train_loader.dataset.split=train_small eval_loader.dataset.split=val_small data_remote=s3://c4-dataset precision="amp_fp16" device_train_microbatch_size=8 # 2080s don't support bfloat16 | 2080s have smaller VRAM
 
-poetry run composer --world_size 8 --node_rank 0 --master_addr 127.0.0.1 --master_port 6378 scripts/train/train.py scripts/train/yamls/pretrain/mpt-125m.yaml train_loader.dataset.split=train_small eval_loader.dataset.split=val_small data_local="/home/ls985/my-copy-c4"
+poetry run composer --world_size 8 --node_rank 0 --master_addr 127.0.0.1 --master_port 6378 scripts/train/train.py scripts/train/yamls/pretrain/mpt-125m.yaml train_loader.dataset.split=train_small eval_loader.dataset.split=val_small data_remote=s3://c4-dataset
 
 poetry run composer --world_size 8 --node_rank 0 --master_addr 127.0.0.1 --master_port 6378 scripts/train/train.py scripts/train/yamls/pretrain/mpt-125m.yaml train_loader.dataset.split=train_small eval_loader.dataset.split=val_small data_local="/tmp/small-c4" data_remote="s3://small-c4-dataset"
 

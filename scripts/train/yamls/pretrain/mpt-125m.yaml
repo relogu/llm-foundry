@@ -1,5 +1,5 @@
-data_local: ./my-copy-c4
-data_remote: # If blank, files must be present in data_local
+data_local: "/tmp/c4-dataset"
+data_remote: "s3://c4-dataset" # If blank, files must be present in data_local
 max_seq_len: 2048
 global_seed: 17
 
@@ -70,8 +70,10 @@ algorithms:
     clipping_type: norm
     clipping_threshold: 1.0
 
-max_duration: 4800ba # ~ 2.5B tokens
-eval_interval: 500ba
+# max_duration: 4800ba # ~ 2.5B tokens
+max_duration: 10ba
+# eval_interval: 500ba
+eval_interval: 10ba
 eval_first: false
 eval_subset_num_batches: -1
 global_train_batch_size: 256
@@ -109,6 +111,7 @@ callbacks:
 
 # Checkpoint to local filesystem or remote object store
 # save_interval: 500ba
+save_interval: 10ba
 # save_num_checkpoints_to_keep: 1  # Important, this cleans up checkpoints saved to DISK
 # save_folder: ./{run_name}/checkpoints
 # save_folder: s3://my-bucket/my-folder/{run_name}/checkpoints
