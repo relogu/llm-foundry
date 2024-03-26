@@ -195,8 +195,8 @@ class ActivationMonitorFullModel(Callback):
                     self.recursively_add_metrics(metrics, module_name, f'_output.{i}', val)
                     total_output_sum_of_squares += metrics.get(f'activations/sum_of_squares/{module_name}_output.{i}',0.0) 
                     
-        metrics['activations/l2_norm/model_inputs'] = float(np.sqrt(total_input_sum_of_squares))  # Add total input sum of squares to metrics
-        metrics['activations/l2_norm/model_outputs'] = float(np.sqrt(total_output_sum_of_squares)) 
+        metrics['activations/l2_norm/full_model_inputs'] = float(np.sqrt(total_input_sum_of_squares))  # Add total input sum of squares to metrics
+        metrics['activations/l2_norm/full_model_outputs'] = float(np.sqrt(total_output_sum_of_squares)) 
                     
         
         if self.only_log_wandb:
