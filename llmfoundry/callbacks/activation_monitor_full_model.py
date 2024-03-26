@@ -224,7 +224,7 @@ class ActivationMonitorFullModel(Callback):
         if isinstance(value, bool) or value.dtype == torch.bool:
             return
         if value.is_floating_point() or value.is_complex():
-            metrics[f'activations/l2_norm/full_model{suffix}'] += (value ** 2).sum().item()
+            metrics[f'activations/l2_norm/full_model{suffix}'] += (value.detach() ** 2).sum().item()
             # TODO: add back in if necessary
             # metrics[f'activations/l2_norm/{name}{suffix}'] = np.sqrt(metrics[f'activations/sum_of_squares/{name}{suffix}'])
             # metrics[f'activations/average/{name}{suffix}'] = value.mean().item()
