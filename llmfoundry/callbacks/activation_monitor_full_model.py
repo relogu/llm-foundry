@@ -169,6 +169,7 @@ class ActivationMonitorFullModel(Callback):
                     return
 
         metrics = {}
+        full_model_metrics = {}
         total_input_sum_of_squares = 0.0
         total_output_sum_of_squares = 0.0
         
@@ -195,21 +196,21 @@ class ActivationMonitorFullModel(Callback):
                     self.recursively_add_metrics(metrics, module_name, f'_output.{i}', val)
                     total_output_sum_of_squares += metrics.get(f'activations/sum_of_squares/{module_name}_output.{i}',0.0) 
                     
-        metrics['activations/l2_norm/full_model_inputs'] = float(np.sqrt(total_input_sum_of_squares))  # Add total input sum of squares to metrics
-        metrics['activations/l2_norm/full_model_outputs'] = float(np.sqrt(total_output_sum_of_squares)) 
+        full_model_metrics['activations/l2_norm/full_model_inputs'] = float(np.sqrt(total_input_sum_of_squares))  # Add total input sum of squares to metrics
+        full_model_metrics['activations/l2_norm/full_model_outputs'] = float(np.sqrt(total_output_sum_of_squares)) 
                     
-        
+        # TODO: switch back to logging the normal metrics dict if necessary
         if self.only_log_wandb:
             wandb_loggers = [ld for ld in logger.destinations if isinstance(ld, WandBLogger)]
             if len(wandb_loggers):
                 for wandb_logger in wandb_loggers:
-                    wandb_logger.log_metrics(metrics, step)
+                    wandb_logger.log_metrics(full_model_metrics, step)
             else:
                 # In the case there were no WandB loggers, just default to
                 # the standard logger and let it take care of it
-                logger.log_metrics(metrics)
+                logger.log_metrics(full_model_metrics)
         else:
-            logger.log_metrics(metrics)
+            logger.log_metrics(full_model_metrics)
 
     def recursively_add_metrics(self, metrics: dict, name: str, suffix: str, values: Any):
         # Becuase of the recursive diving, we need this call to prevent infinite recursion.
@@ -229,12 +230,13 @@ class ActivationMonitorFullModel(Callback):
             return
         if value.is_floating_point() or value.is_complex():
             metrics[f'activations/sum_of_squares/{name}{suffix}'] = (value ** 2).sum().item()
-            metrics[f'activations/l2_norm/{name}{suffix}'] = np.sqrt(metrics[f'activations/sum_of_squares/{name}{suffix}'])
-            metrics[f'activations/average/{name}{suffix}'] = value.mean().item()
-            metrics[f'activations/kurtosis/{name}{suffix}'] = compute_kurtosis(value).item()
+            # TODO: add back in if necessary
+            # metrics[f'activations/l2_norm/{name}{suffix}'] = np.sqrt(metrics[f'activations/sum_of_squares/{name}{suffix}'])
+            # metrics[f'activations/average/{name}{suffix}'] = value.mean().item()
+            # metrics[f'activations/kurtosis/{name}{suffix}'] = compute_kurtosis(value).item()
 
-            # Because we call max with `dim=-1` we need to call .values to get the actual values
-            metrics[f'activations/max/{name}{suffix}'] = value.max(dim=-1).values.mean().item()
+            # # Because we call max with `dim=-1` we need to call .values to get the actual values
+            # metrics[f'activations/max/{name}{suffix}'] = value.max(dim=-1).values.mean().item()
 
     def create_module_names(self, model: torch.nn.Module):
         self.module_names = {m: name for name, m in model.named_modules()}
