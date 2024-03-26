@@ -13,7 +13,7 @@ import torch
 from composer import algorithms
 from composer.callbacks import (EarlyStopper, Generate, LRMonitor,
                                 MemoryMonitor, OptimizerMonitor,
-                                RuntimeEstimator, SpeedMonitor)
+                                RuntimeEstimator, SpeedMonitor, ActivationMonitor)
 from composer.core import Algorithm, Callback, Evaluator
 from composer.datasets.in_context_learning_evaluation import \
     get_icl_task_dataloader
@@ -33,7 +33,7 @@ from transformers import AutoTokenizer, PreTrainedTokenizerBase
 from llmfoundry.callbacks import (AsyncEval, EvalGauntlet, FDiffMetrics,
                                   GlobalLRScaling, HuggingFaceCheckpointer,
                                   LayerFreezing, MonolithicCheckpointSaver,
-                                  ScheduledGarbageCollector)
+                                  ScheduledGarbageCollector, ActivationMonitorFullModel)
 from llmfoundry.data.dataloader import build_dataloader
 from llmfoundry.optim import (DecoupledAdaLRLion, DecoupledClipLion,
                               DecoupledLionW, DecoupledLionW_8bit)
@@ -175,6 +175,25 @@ def build_callback(
     elif name == 'optimizer_monitor':
         return OptimizerMonitor(log_optimizer_metrics=kwargs.get(
             'log_optimizer_metrics', True),)
+    elif name == 'activation_monitor':
+        ignore_module_types = kwargs.get('ignore_module_types', None)
+        if ignore_module_types:
+            ignore_module_types = om.to_object(ignore_module_types)
+            
+        return ActivationMonitor(
+            interval=kwargs.get('interval', '25ba'),
+            ignore_module_types=ignore_module_types,  
+            only_log_wandb=kwargs.get('only_log_wandb', False),
+        )
+    elif name == 'activation_monitor_full_model':
+        ignore_module_types = kwargs.get('ignore_module_types', None)
+        if ignore_module_types:
+            ignore_module_types = om.to_object(ignore_module_types)
+        return ActivationMonitorFullModel(
+            interval=kwargs.get('interval', '25ba'),
+            ignore_module_types=ignore_module_types, 
+            only_log_wandb=kwargs.get('only_log_wandb', False),
+        )
     elif name == 'generate_callback':
         prompts = kwargs.pop('prompts')
         interval = kwargs.pop('interval', None)
@@ -182,7 +201,7 @@ def build_callback(
         if interval is None:
             batch_log_interval: str = kwargs.pop('batch_log_interval', '')
             if batch_log_interval:
-                interval = f'{batch_log_interval}ba'
+                interval = f'{batch_log_interval}ba' 
                 warnings.warn(
                     ('generate_callback.batch_log_interval is deprecated and will be removed in a future release.'
                      f'Please use interval: {interval}'),
