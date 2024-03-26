@@ -3,6 +3,7 @@
 
 try:
     from llmfoundry.callbacks.async_eval_callback import AsyncEval
+    from llmfoundry.callbacks.activation_monitor_full_model import ActivationMonitorFullModel
     from llmfoundry.callbacks.eval_gauntlet_callback import EvalGauntlet
     from llmfoundry.callbacks.fdiff_callback import FDiffMetrics
     from llmfoundry.callbacks.hf_checkpointer import HuggingFaceCheckpointer
@@ -26,4 +27,5 @@ __all__ = [
     'EvalGauntlet',
     'HuggingFaceCheckpointer',
     'AsyncEval',
+    "ActivationMonitorFullModel",
 ]
