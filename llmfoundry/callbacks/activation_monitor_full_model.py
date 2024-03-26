@@ -3,11 +3,12 @@
 
 """Monitor activation values during training."""
 
+from collections import defaultdict
 import warnings
 from functools import partial
 from typing import Any, List, Optional, Sequence, Union
 import numpy as np
-
+ 
 import torch
 
 from composer.core import Callback, State, Time, TimeUnit
@@ -168,7 +169,7 @@ class ActivationMonitorFullModel(Callback):
                 if ignore_module_type in module_name:
                     return
 
-        metrics = {}
+        metrics = defaultdict(float)
         full_model_metrics = {}
         total_input_sum_of_squares = 0.0
         total_output_sum_of_squares = 0.0
@@ -179,57 +180,54 @@ class ActivationMonitorFullModel(Callback):
                 if val is None or isinstance(val, dict):
                     continue
                 if isinstance(val, str) and isinstance(input, dict):
-                    self.recursively_add_metrics(metrics, module_name, f'_input.{i}', output[val])  # type: ignore
-                    total_input_sum_of_squares += metrics.get(f'activations/sum_of_squares/{module_name}_input.{i}',0.0)
+                    self.recursively_add_metrics(metrics, module_name, '_input', i, output[val])  # type: ignore
                 else:
-                    self.recursively_add_metrics(metrics, module_name, f'_input.{i}', val)
-                    total_input_sum_of_squares += metrics.get(f'activations/sum_of_squares/{module_name}_input.{i}',0.0)
+                    self.recursively_add_metrics(metrics, module_name, '_input', i, val)
 
         if output is not None:
-            for i, val in enumerate(output):
+            for i, val in enumerate(output): 
                 if val is None or isinstance(val, dict):
                     continue
                 if isinstance(val, str) and isinstance(output, dict):
-                    self.recursively_add_metrics(metrics, module_name, f'_output.{i}', output[val])  # type: ignore
-                    total_output_sum_of_squares += metrics.get(f'activations/sum_of_squares/{module_name}_output.{i}', 0.0) 
+                    self.recursively_add_metrics(metrics, module_name, '_output', i,output[val])  # type: ignore
                 else:
-                    self.recursively_add_metrics(metrics, module_name, f'_output.{i}', val)
-                    total_output_sum_of_squares += metrics.get(f'activations/sum_of_squares/{module_name}_output.{i}',0.0) 
-                    
-        full_model_metrics['activations/l2_norm/full_model_inputs'] = float(np.sqrt(total_input_sum_of_squares))  # Add total input sum of squares to metrics
-        full_model_metrics['activations/l2_norm/full_model_outputs'] = float(np.sqrt(total_output_sum_of_squares)) 
+                    self.recursively_add_metrics(metrics, module_name, '_output', i,val)
+                 
+        metrics['activations/l2_norm/full_model_input']  = float(np.sqrt(metrics['activations/l2_norm/full_model_input']))
+        metrics['activations/l2_norm/full_model_output']  = float(np.sqrt(metrics['activations/l2_norm/full_model_output']))
+     
                     
         # TODO: switch back to logging the normal metrics dict if necessary
         if self.only_log_wandb:
             wandb_loggers = [ld for ld in logger.destinations if isinstance(ld, WandBLogger)]
             if len(wandb_loggers):
                 for wandb_logger in wandb_loggers:
-                    wandb_logger.log_metrics(full_model_metrics, step)
+                    wandb_logger.log_metrics(metrics, step)
             else:
                 # In the case there were no WandB loggers, just default to
                 # the standard logger and let it take care of it
-                logger.log_metrics(full_model_metrics)
+                logger.log_metrics(metrics)
         else:
-            logger.log_metrics(full_model_metrics)
+            logger.log_metrics(metrics)
 
-    def recursively_add_metrics(self, metrics: dict, name: str, suffix: str, values: Any):
+    def recursively_add_metrics(self, metrics: dict, name: str, suffix: str, index: int, values: Any):
         # Becuase of the recursive diving, we need this call to prevent infinite recursion.
         if isinstance(values, str):
             return
         # Keep recursively diving if the value is a sequence
         if isinstance(values, Sequence):
             for i, value in enumerate(values):
-                self.recursively_add_metrics(metrics, f'{name}_{i}', suffix, value)
+                self.recursively_add_metrics(metrics, f'{name}_{i}', suffix,index, value)
             return
         else:
-            self.add_metrics(metrics, name, suffix, values)
+            self.add_metrics(metrics, name, suffix, index, values)
 
-    def add_metrics(self, metrics: dict, name: str, suffix: str, value: torch.Tensor):
+    def add_metrics(self, metrics: dict, name: str, suffix: str, index: int, value: torch.Tensor):
         # We shouldn't log booleans
         if isinstance(value, bool) or value.dtype == torch.bool:
             return
         if value.is_floating_point() or value.is_complex():
-            metrics[f'activations/sum_of_squares/{name}{suffix}'] = (value ** 2).sum().item()
+            metrics[f'activations/l2_norm/full_model{suffix}'] += (value ** 2).sum().item()
             # TODO: add back in if necessary
             # metrics[f'activations/l2_norm/{name}{suffix}'] = np.sqrt(metrics[f'activations/sum_of_squares/{name}{suffix}'])
             # metrics[f'activations/average/{name}{suffix}'] = value.mean().item()
