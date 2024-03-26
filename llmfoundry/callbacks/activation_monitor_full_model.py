@@ -170,9 +170,6 @@ class ActivationMonitorFullModel(Callback):
                     return
 
         metrics = defaultdict(float)
-        full_model_metrics = {}
-        total_input_sum_of_squares = 0.0
-        total_output_sum_of_squares = 0.0
         
        
         if input is not None:
