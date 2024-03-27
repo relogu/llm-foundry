@@ -174,7 +174,8 @@ def build_callback(
         return RuntimeEstimator()
     elif name == 'optimizer_monitor':
         return OptimizerMonitor(log_optimizer_metrics=kwargs.get(
-            'log_optimizer_metrics', True),)
+            'log_optimizer_metrics', True), interval=kwargs.get(
+                'interval', 10))
     elif name == 'activation_monitor':
         ignore_module_types = kwargs.get('ignore_module_types', None)
         if ignore_module_types:
