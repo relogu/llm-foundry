@@ -433,6 +433,10 @@ class MPTModel(MPTPreTrainedModel):
         return self.wte
 
     def set_input_embeddings(self, value: Union[SharedEmbedding, nn.Embedding]) -> None:
+        # NOTE: If we use a different tokenizer from gpt2
+        # we need to make sure we are forward and backward
+        # compatible with the SharedEmbedding of MosaicML
+        # Which requires the unembed parameter to work
         if not isinstance(value, SharedEmbedding):
             original_forward = value.forward
 
