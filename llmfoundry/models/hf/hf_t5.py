@@ -7,24 +7,25 @@ from __future__ import annotations
 
 from typing import Mapping
 
-from composer.metrics.nlp import LanguageCrossEntropy, MaskedAccuracy
 from composer.utils import dist
 from omegaconf import DictConfig
-from transformers import (AutoConfig, PreTrainedTokenizerBase,
-                          T5ForConditionalGeneration)
+from transformers import (
+    AutoConfig,
+    PreTrainedTokenizerBase,
+    T5ForConditionalGeneration,
+)
 
+from llmfoundry.metrics import DEFAULT_ENC_DEC_METRICS
 from llmfoundry.models.hf.hf_fsdp import hf_get_init_device
-from llmfoundry.models.hf.model_wrapper import HuggingFaceModelWithZLoss
-from llmfoundry.models.utils import (adapt_tokenizer_for_denoising,
-                                     init_empty_weights)
+from llmfoundry.models.hf.model_wrapper import HuggingFaceModelWithFSDP
+from llmfoundry.models.utils import init_empty_weights
+from llmfoundry.utils.warnings import experimental_class
 
 __all__ = ['ComposerHFT5']
 
-# HuggingFace hardcodes the ignore index to -100
-_HF_IGNORE_INDEX = -100
 
-
-class ComposerHFT5(HuggingFaceModelWithZLoss):
+@experimental_class('ComposerHFT5')
+class ComposerHFT5(HuggingFaceModelWithFSDP):
     """Configures a :class:`.HuggingFaceModel` around a T5.
 
     Note: This function uses `transformers.T5ForConditionalGeneration`. Future releases
@@ -43,20 +44,16 @@ class ComposerHFT5(HuggingFaceModelWithZLoss):
             cfg.init_device ('cpu' | 'meta'): Which device, 'cpu' or 'meta', to
                 initialize the model on. Currently, `meta` is only supported when
                 cfg.pretrained is ``False``. Default: ``'cpu'``.
-            cfg.z_loss (float, optional): The coefficient of the z-loss. If >0.0, this
-                the z-loss will be multiplied by this value before being added to the
-                standard loss term. Default: ``0.0``.
-            cfg.adapt_vocab_for_denoising (bool, optional):  Whether to adapt the vocab
-                of the model/tokenizer to include sentinel tokens that are used in denoising
-                tasks like Span Corruption. If you intend to load from an existing Composer
-                checkpoint that was trained on such a task, set this to ``True`` to ensure
-                that the model vocab size matches your checkpoint's vocab size when loading
-                the weights. Default: ``False``.
         tokenizer (PreTrainedTokenizer): The tokenizer that the model will use.
     """
 
-    def __init__(self, om_model_config: DictConfig,
-                 tokenizer: PreTrainedTokenizerBase):
+    def __init__(
+        self,
+        om_model_config: DictConfig,
+        tokenizer: PreTrainedTokenizerBase,
+    ):
+        from llmfoundry.utils.builders import build_metric
+
         config = AutoConfig.from_pretrained(
             om_model_config.pretrained_model_name_or_path,
             trust_remote_code=om_model_config.get('trust_remote_code', True),
@@ -67,7 +64,7 @@ class ComposerHFT5(HuggingFaceModelWithZLoss):
         for k, v in om_model_config.get('config_overrides', {}).items():
             if not hasattr(config, k):
                 raise ValueError(
-                    f'config does not have attribute "{k}" to override ({k}: {v}).'
+                    f'config does not have attribute "{k}" to override ({k}: {v}).',
                 )
 
             attr = getattr(config, k)
@@ -77,7 +74,8 @@ class ComposerHFT5(HuggingFaceModelWithZLoss):
                     raise ValueError(
                         f'Config dict override got unknown keys. ' +
                         f'Extra keys: {extra_keys}. ' +
-                        f'Expected (a subset of) keys: {list(attr.keys())}.')
+                        f'Expected (a subset of) keys: {list(attr.keys())}.',
+                    )
                 getattr(config, k).update(v)
             else:
                 setattr(config, k, v)
@@ -85,10 +83,6 @@ class ComposerHFT5(HuggingFaceModelWithZLoss):
         if not config.is_encoder_decoder:
             raise ValueError(f'Model type "hf_t5" currently only supports T5 models ' +\
                              f'using configs where `is_encoder_decoder` is ``True``.')
-
-        # Set up the tokenizer (add tokens for denoising sentinels if needed)
-        if om_model_config.get('adapt_vocab_for_denoising', False):
-            adapt_tokenizer_for_denoising(tokenizer)
 
         init_device = om_model_config.get('init_device', 'cpu')
 
@@ -105,30 +99,30 @@ class ComposerHFT5(HuggingFaceModelWithZLoss):
             if om_model_config.pretrained:
                 model = T5ForConditionalGeneration.from_pretrained(
                     om_model_config.pretrained_model_name_or_path,
-                    config=config)
+                    config=config,
+                )
             else:
                 model = T5ForConditionalGeneration(config)
         elif resolved_init_device == 'meta':
             if om_model_config.pretrained:
                 raise ValueError(
-                    'Setting cfg.pretrained=True is not supported when init_device="meta".'
+                    'Setting cfg.pretrained=True is not supported when init_device="meta".',
                 )
             with init_empty_weights(include_buffers=False):
                 model = T5ForConditionalGeneration(config)
         else:
             raise ValueError(
-                f'init_device="{init_device}" must be either "cpu" or "meta".')
+                f'init_device="{init_device}" must be either "cpu" or "meta".',
+            )
 
         metrics = [
-            LanguageCrossEntropy(ignore_index=_HF_IGNORE_INDEX),
-            MaskedAccuracy(ignore_index=_HF_IGNORE_INDEX)
+            build_metric(metric, {}) for metric in DEFAULT_ENC_DEC_METRICS +
+            om_model_config.get('additional_train_metrics', [])
         ]
 
-        composer_model = super().__init__(model=model,
-                                          tokenizer=tokenizer,
-                                          metrics=metrics,
-                                          z_loss=om_model_config.get(
-                                              'z_loss', 0.0),
-                                          init_device=init_device)
-
-        return composer_model
+        super().__init__(
+            model=model,
+            tokenizer=tokenizer,
+            metrics=metrics,
+            init_device=init_device,
+        )

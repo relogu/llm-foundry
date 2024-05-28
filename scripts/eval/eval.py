@@ -11,97 +11,37 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
 import torch
-from composer.loggers import MosaicMLLogger
+from composer.core import Callback
 from composer.loggers.logger_destination import LoggerDestination
-from composer.models.base import ComposerModel
 from composer.trainer import Trainer
 from composer.utils import dist, get_device, reproducibility
 from omegaconf import DictConfig, ListConfig
 from omegaconf import OmegaConf as om
 from rich.traceback import install
-from transformers import (AutoModelForCausalLM, PreTrainedTokenizerBase,
-                          T5ForConditionalGeneration)
+
+from llmfoundry.utils import (
+    find_mosaicml_logger,
+    log_eval_analytics,
+    maybe_create_mosaicml_logger,
+)
 
 install()
-from llmfoundry.models import MPTForCausalLM
-from llmfoundry.models.model_registry import COMPOSER_MODEL_REGISTRY
-from llmfoundry.utils.builders import (add_metrics_to_eval_loaders,
-                                       build_evaluators, build_logger,
-                                       build_tokenizer)
-from llmfoundry.utils.config_utils import (log_config, pop_config,
-                                           process_init_device)
+from llmfoundry.utils.builders import (
+    add_metrics_to_eval_loaders,
+    build_callback,
+    build_composer_model,
+    build_evaluators,
+    build_logger,
+    build_tokenizer,
+)
+from llmfoundry.utils.config_utils import (
+    log_config,
+    pop_config,
+    process_init_device,
+)
+from llmfoundry.utils.registry_utils import import_file
 
 log = logging.getLogger(__name__)
-
-
-def load_peft_model(model_cfg: DictConfig, tokenizer: PreTrainedTokenizerBase,
-                    num_retries: int) -> ComposerModel:
-    try:
-        from peft import PeftModel
-    except ImportError as e:
-        raise ImportError(
-            f'Error importing from peft. Run `pip install -e .[gpu,peft]`. \n {e}'
-        )
-
-    model_registry = {
-        'mpt_causal_lm': MPTForCausalLM,
-        'hf_causal_lm': AutoModelForCausalLM,
-        'hf_prefix_lm': AutoModelForCausalLM,
-        'hf_t5': T5ForConditionalGeneration,
-    }
-
-    retries = 0
-    composer_model_wrapper = None
-    while retries < num_retries and composer_model_wrapper is None:
-        try:
-            trust_remote_code = model_cfg.get('trust_remote_code', True)
-            use_auth_token = model_cfg.get('use_auth_token', False)
-            model = model_registry[model_cfg.name].from_pretrained(
-                model_cfg.pretrained_model_name_or_path,
-                trust_remote_code=trust_remote_code,
-                use_auth_token=use_auth_token,
-            )
-
-            peft_model = PeftModel.from_pretrained(
-                model, model_cfg.pretrained_lora_id_or_path)
-
-            composer_model_wrapper = COMPOSER_MODEL_REGISTRY[model_cfg.name](
-                peft_model, tokenizer)
-        except Exception as e:
-            retries += 1
-            if retries >= num_retries:
-                raise e
-            else:
-                log.info(
-                    f'Got exception {str(e)} while loading model {model_cfg.name}. {num_retries-retries} retries remaining'
-                )
-
-    assert composer_model_wrapper is not None
-    return composer_model_wrapper
-
-
-def load_model(model_cfg: DictConfig, tokenizer: PreTrainedTokenizerBase,
-               fsdp_config: Optional[Dict], num_retries: int) -> ComposerModel:
-    init_context = process_init_device(model_cfg, fsdp_config)
-
-    retries = 0
-    composer_model = None
-    with init_context:
-        while retries < num_retries and composer_model is None:
-            try:
-                composer_model = COMPOSER_MODEL_REGISTRY[model_cfg.name](
-                    model_cfg, tokenizer)
-            except Exception as e:
-                retries += 1
-                if retries >= num_retries:
-                    raise e
-                else:
-                    log.info(
-                        f'Got exception {str(e)} while loading model {model_cfg.name}. {num_retries-retries} retries remaining'
-                    )
-
-    assert composer_model is not None
-    return composer_model
 
 
 def evaluate_model(
@@ -115,13 +55,13 @@ def evaluate_model(
     eval_gauntlet_config: Optional[Union[str, DictConfig]],
     eval_loader_config: Optional[Union[DictConfig, ListConfig]],
     fsdp_config: Optional[Dict],
-    num_retries: int,
-    loggers_cfg: Dict[str, Any],
+    loggers: List[LoggerDestination],
     python_log_level: Optional[str],
     precision: str,
     eval_gauntlet_df: Optional[pd.DataFrame],
     eval_subset_num_batches: int,
     icl_subset_num_batches: Optional[int],
+    callback_configs: Optional[DictConfig],
     metadata: Optional[Dict[str, str]],
     logged_config: DictConfig,
     should_log_config: bool = True,
@@ -129,9 +69,10 @@ def evaluate_model(
 
     log.info(f'Evaluating model: {model_cfg.model_name}')
     # Build tokenizer and model
-    tokenizer_cfg: Dict[str,
-                        Any] = om.to_container(model_cfg.tokenizer,
-                                               resolve=True)  # type: ignore
+    tokenizer_cfg: Dict[str, Any] = om.to_container(
+        model_cfg.tokenizer,
+        resolve=True,
+    )  # type: ignore
     tokenizer_name = tokenizer_cfg['name']
     tokenizer_kwargs = tokenizer_cfg.get('kwargs', {})
     tokenizer = build_tokenizer(tokenizer_name, tokenizer_kwargs)
@@ -146,24 +87,18 @@ def evaluate_model(
         icl_subset_num_batches=icl_subset_num_batches,
     )
 
-    callbacks = []
+    # Callbacks
+    callbacks: List[Callback] = [
+        build_callback(name=str(name), kwargs=callback_cfg)
+        for name, callback_cfg in callback_configs.items()
+    ] if callback_configs else []
+
     if eval_gauntlet_callback is not None:
         callbacks.append(eval_gauntlet_callback)
 
-    loggers: List[LoggerDestination] = [
-        build_logger(name, logger_cfg)
-        for name, logger_cfg in loggers_cfg.items()
-    ]
-
     if metadata is not None:
-        # Flatten the metadata for logging
-        loggers_cfg.pop('metadata', None)
-        loggers_cfg.update(metadata, merge=True)
-
         # Find the MosaicMLLogger
-        mosaicml_logger = next((
-            logger for logger in loggers if isinstance(logger, MosaicMLLogger)),
-                               None)
+        mosaicml_logger = find_mosaicml_logger(loggers)
 
         if mosaicml_logger is not None:
             mosaicml_logger.log_metrics(metadata)
@@ -172,33 +107,38 @@ def evaluate_model(
     if fsdp_config and model_cfg.model.get('load_in_8bit', False):
         raise ValueError(
             'The FSDP config block is not supported when loading ' +
-            'Hugging Face models in 8bit.')
+            'Hugging Face models in 8bit.',
+        )
 
-    if hasattr(model_cfg.model, 'pretrained_lora_id_or_path'):
-        composer_model = load_peft_model(model_cfg.model, tokenizer,
-                                         num_retries)
-    else:
-        composer_model = load_model(model_cfg.model, tokenizer, fsdp_config,
-                                    num_retries)
+    init_context = process_init_device(model_cfg.model, fsdp_config)
+
+    composer_model = build_composer_model(
+        name=model_cfg.model.name,
+        cfg=model_cfg.model,
+        tokenizer=tokenizer,
+        init_context=init_context,
+    )
 
     # Now add the eval metrics
     if eval_loader_config is not None:
         train_metrics = composer_model.get_metrics(is_train=True)
-        evaluators = add_metrics_to_eval_loaders(evaluators,
-                                                 list(train_metrics.keys()))
+        evaluators = add_metrics_to_eval_loaders(
+            evaluators,
+            list(train_metrics.keys()),
+        )
 
     if eval_gauntlet_df is None and eval_gauntlet_callback is not None:
         eval_gauntlet_df = pd.DataFrame(
-            columns=['model_name'] +
-            [avg for avg in eval_gauntlet_callback.averages] +
-            [t.name for t in eval_gauntlet_callback.categories])
+            columns=['model_name'] + list(eval_gauntlet_callback.averages) +
+            [t.name for t in eval_gauntlet_callback.categories],
+        )
 
     load_path = model_cfg.get('load_path', None)
     if model_cfg.model.name == 'mpt_causal_lm' and load_path is None:
         raise ValueError(
             'MPT causal LMs require a load_path to the checkpoint for model evaluation.'
             +
-            ' Please check your yaml and the model_cfg to ensure that load_path is set.'
+            ' Please check your yaml and the model_cfg to ensure that load_path is set.',
         )
 
     assert composer_model is not None
@@ -228,8 +168,10 @@ def evaluate_model(
     if torch.cuda.is_available():
         torch.cuda.synchronize()
     a = time.time()
-    trainer.eval(eval_dataloader=evaluators,
-                 subset_num_batches=eval_subset_num_batches)
+    trainer.eval(
+        eval_dataloader=evaluators,
+        subset_num_batches=eval_subset_num_batches,
+    )
     if torch.cuda.is_available():
         torch.cuda.synchronize()
     b = time.time()
@@ -239,87 +181,121 @@ def evaluate_model(
 
 
 def main(cfg: DictConfig) -> Tuple[List[Trainer], pd.DataFrame]:
+    # Run user provided code if specified
+    code_paths = pop_config(
+        cfg,
+        'code_paths',
+        must_exist=False,
+        default_value=[],
+        convert=True,
+    )
+    for code_path in code_paths:
+        import_file(code_path)
+
     om.resolve(cfg)
 
     # Create copy of config for logging
     logged_cfg: DictConfig = copy.deepcopy(cfg)
 
     model_configs: ListConfig = pop_config(cfg, 'models', must_exist=True)
-    eval_gauntlet_config: Optional[Union[str, DictConfig]] = pop_config(
-        cfg, 'eval_gauntlet', must_exist=False, default_value=None)
+    eval_gauntlet_config: Optional[
+        Union[str, DictConfig]
+    ] = pop_config(cfg, 'eval_gauntlet', must_exist=False, default_value=None)
 
-    fsdp_dict_cfg: Optional[DictConfig] = pop_config(cfg,
-                                                     'fsdp_config',
-                                                     must_exist=False,
-                                                     default_value=None)
+    fsdp_dict_cfg: Optional[DictConfig] = pop_config(
+        cfg,
+        'fsdp_config',
+        must_exist=False,
+        default_value=None,
+    )
     fsdp_config: Optional[Dict] = om.to_container(
         fsdp_dict_cfg,
-        resolve=True) if fsdp_dict_cfg is not None else None  # type: ignore
+        resolve=True,
+    ) if fsdp_dict_cfg is not None else None  # type: ignore
     assert isinstance(fsdp_config, Dict) or fsdp_config is None
 
     # Mandatory Evaluation Parameters
-    icl_tasks: Union[str, ListConfig] = pop_config(cfg,
-                                                   'icl_tasks',
-                                                   must_exist=True)
+    icl_tasks: Union[
+        str, ListConfig] = pop_config(cfg, 'icl_tasks', must_exist=True)
     max_seq_len: int = pop_config(cfg, 'max_seq_len', must_exist=True)
-    device_eval_batch_size: int = pop_config(cfg,
-                                             'device_eval_batch_size',
-                                             must_exist=True)
-    precision: str = pop_config(cfg,
-                                'precision',
-                                must_exist=False,
-                                default_value=None)
-    python_log_level: Optional[str] = pop_config(cfg,
-                                                 'python_log_level',
-                                                 must_exist=False,
-                                                 default_value='debug')
+    device_eval_batch_size: int = pop_config(
+        cfg,
+        'device_eval_batch_size',
+        must_exist=True,
+    )
+    precision: str = pop_config(
+        cfg,
+        'precision',
+        must_exist=False,
+        default_value=None,
+    )
+    python_log_level: Optional[str] = pop_config(
+        cfg,
+        'python_log_level',
+        must_exist=False,
+        default_value='debug',
+    )
 
     # Optional Evaluation Parameters with default values
-    eval_loader_config: Optional[Union[DictConfig, ListConfig]] = pop_config(
-        cfg, 'eval_loader', must_exist=False, default_value=None)
+    eval_loader_config: Optional[
+        Union[DictConfig, ListConfig]
+    ] = pop_config(cfg, 'eval_loader', must_exist=False, default_value=None)
     seed: int = pop_config(cfg, 'seed', must_exist=False, default_value=17)
-    dist_timeout: Union[float, int] = pop_config(cfg,
-                                                 'dist_timeout',
-                                                 must_exist=False,
-                                                 default_value=600.0)
+    dist_timeout: Union[float, int] = pop_config(
+        cfg,
+        'dist_timeout',
+        must_exist=False,
+        default_value=600.0,
+    )
     default_run_name: str = os.environ.get('RUN_NAME', 'llm')
-    run_name: str = pop_config(cfg,
-                               'run_name',
-                               must_exist=False,
-                               default_value=default_run_name)
-    num_retries: int = pop_config(cfg,
-                                  'num_retries',
-                                  must_exist=False,
-                                  default_value=3)
-    loggers_cfg: Dict[str, Any] = pop_config(cfg,
-                                             'loggers',
-                                             must_exist=False,
-                                             default_value={})
-    eval_subset_num_batches: int = pop_config(cfg,
-                                              'eval_subset_num_batches',
-                                              must_exist=False,
-                                              default_value=-1)
-    icl_subset_num_batches: Optional[int] = pop_config(cfg,
-                                                       'icl_subset_num_batches',
-                                                       must_exist=False,
-                                                       default_value=None)
-    metadata: Optional[Dict[str, str]] = pop_config(cfg,
-                                                    'metadata',
-                                                    must_exist=False,
-                                                    default_value=None,
-                                                    convert=True)
-    should_log_config: bool = pop_config(cfg,
-                                         'log_config',
-                                         must_exist=False,
-                                         default_value=True)
+    run_name: str = pop_config(
+        cfg,
+        'run_name',
+        must_exist=False,
+        default_value=default_run_name,
+    )
+    loggers_cfg: Dict[
+        str,
+        Any] = pop_config(cfg, 'loggers', must_exist=False, default_value={})
+    eval_subset_num_batches: int = pop_config(
+        cfg,
+        'eval_subset_num_batches',
+        must_exist=False,
+        default_value=-1,
+    )
+    icl_subset_num_batches: Optional[int] = pop_config(
+        cfg,
+        'icl_subset_num_batches',
+        must_exist=False,
+        default_value=None,
+    )
+    metadata: Optional[Dict[str, str]] = pop_config(
+        cfg,
+        'metadata',
+        must_exist=False,
+        default_value=None,
+        convert=True,
+    )
+    should_log_config: bool = pop_config(
+        cfg,
+        'log_config',
+        must_exist=False,
+        default_value=True,
+    )
 
     # Pop out interpolation variables.
     pop_config(cfg, 'model_name_or_path', must_exist=False, default_value=None)
+    callback_configs: Optional[DictConfig] = pop_config(
+        cfg,
+        'callbacks',
+        must_exist=False,
+        default_value=None,
+    )
 
     # Warn for unused parameters
     for key in cfg:
         warnings.warn(
-            f'Unused parameter {key} found in cfg. Please check your yaml to ensure this parameter is necessary.'
+            f'Unused parameter {key} found in cfg. Please check your yaml to ensure this parameter is necessary.',
         )
 
     reproducibility.seed_all(seed)
@@ -330,7 +306,7 @@ def main(cfg: DictConfig) -> Tuple[List[Trainer], pd.DataFrame]:
             # Example of format string
             # 2022-06-29 11:22:26,152: rank0[822018][MainThread]: INFO: Message here
             format=
-            f'%(asctime)s: rank{dist.get_global_rank()}[%(process)d][%(threadName)s]: %(levelname)s: %(name)s: %(message)s'
+            f'%(asctime)s: rank{dist.get_global_rank()}[%(process)d][%(threadName)s]: %(levelname)s: %(name)s: %(message)s',
         )
         logging.getLogger('llmfoundry').setLevel(python_log_level.upper())
 
@@ -338,7 +314,41 @@ def main(cfg: DictConfig) -> Tuple[List[Trainer], pd.DataFrame]:
     models_df = None
     composite_scores = None
     trainers = []
+
+    loggers: List[LoggerDestination] = [
+        build_logger(name, logger_cfg)
+        for name, logger_cfg in loggers_cfg.items()
+    ]
+
+    mosaicml_logger = find_mosaicml_logger(loggers)
+    if mosaicml_logger is None:
+        mosaicml_logger = maybe_create_mosaicml_logger()
+        # mosaicml_logger will be None if run isn't on MosaicML platform
+        if mosaicml_logger is not None:
+            loggers.append(mosaicml_logger)
+
+    # mosaicml_logger will be None if the run isn't from the MosaicML platform
+    if mosaicml_logger is not None:
+        log_eval_analytics(
+            mosaicml_logger,
+            model_configs,
+            icl_tasks,
+            eval_gauntlet_config,
+        )
+
     for model_cfg in model_configs:
+
+        attn_config = model_cfg.model.get('attn_config', None)
+        if attn_config is not None:
+            seq_parallel_world_size = attn_config.get(
+                'seq_parallel_world_size',
+                None,
+            )
+            if seq_parallel_world_size is not None and seq_parallel_world_size != 1:
+                raise ValueError(
+                    'Offline eval does not support sequence parallelism.',
+                )
+
         (trainer, logger_keys, eval_gauntlet_callback,
          eval_gauntlet_df) = evaluate_model(
              model_cfg=model_cfg,
@@ -351,21 +361,24 @@ def main(cfg: DictConfig) -> Tuple[List[Trainer], pd.DataFrame]:
              eval_gauntlet_config=eval_gauntlet_config,
              eval_loader_config=eval_loader_config,
              fsdp_config=fsdp_config,
-             num_retries=num_retries,
-             loggers_cfg=loggers_cfg,
+             loggers=loggers,
              python_log_level=python_log_level,
              precision=precision,
              eval_gauntlet_df=eval_gauntlet_df,
+             callback_configs=callback_configs,
              eval_subset_num_batches=eval_subset_num_batches,
              icl_subset_num_batches=icl_subset_num_batches,
              metadata=metadata,
              logged_config=logged_cfg,
-             should_log_config=should_log_config)
+             should_log_config=should_log_config,
+         )
         trainers.append(trainer)
 
         if eval_gauntlet_callback is not None:
             composite_scores = eval_gauntlet_callback.eval_after_all(
-                trainer.state, trainer.logger)
+                trainer.state,
+                trainer.logger,
+            )
 
         benchmark_to_taxonomy = {}
         if eval_gauntlet_callback is not None:
@@ -373,9 +386,12 @@ def main(cfg: DictConfig) -> Tuple[List[Trainer], pd.DataFrame]:
                 for b in t.benchmarks:
                     benchmark_to_taxonomy[b.name] = t.name
 
-        model_results = calculate_markdown_results(logger_keys, trainer,
-                                                   benchmark_to_taxonomy,
-                                                   model_cfg.model_name)
+        model_results = calculate_markdown_results(
+            logger_keys,
+            trainer,
+            benchmark_to_taxonomy,
+            model_cfg.model_name,
+        )
 
         if models_df is None:
             models_df = model_results
@@ -385,27 +401,38 @@ def main(cfg: DictConfig) -> Tuple[List[Trainer], pd.DataFrame]:
         if eval_gauntlet_df is not None and eval_gauntlet_callback is not None:
             assert composite_scores is not None
             row = {'model_name': model_cfg['model_name']}
-            row.update(
-                {k.split('/')[-1]: v for k, v in composite_scores.items()})
-            eval_gauntlet_df = pd.concat(
-                [eval_gauntlet_df, pd.DataFrame([row])], ignore_index=True)
+            row.update({
+                k.split('/')[-1]: v for k, v in composite_scores.items()
+            })
+            eval_gauntlet_df = pd.concat([
+                eval_gauntlet_df,
+                pd.DataFrame([row]),
+            ],
+                                         ignore_index=True)
 
             print(f'Printing gauntlet results for all models')
 
             print(
                 eval_gauntlet_df.sort_values(
                     list(eval_gauntlet_callback.averages.keys())[0],
-                    ascending=False).to_markdown(index=False))
+                    ascending=False,
+                ).to_markdown(index=False),
+            )
         print(f'Printing complete results for all models')
         assert models_df is not None
         print(models_df.to_markdown(index=False))
 
+        trainer.close()
+
     return trainers, eval_gauntlet_df
 
 
-def calculate_markdown_results(logger_keys: List[str], trainer: Trainer,
-                               benchmark_to_taxonomy: Dict[str, str],
-                               model_name: str):
+def calculate_markdown_results(
+    logger_keys: List[str],
+    trainer: Trainer,
+    benchmark_to_taxonomy: Dict[str, str],
+    model_name: str,
+):
     results = {}
 
     for key in logger_keys:
@@ -431,13 +458,19 @@ def calculate_markdown_results(logger_keys: List[str], trainer: Trainer,
 
         results[dl_name[1]][dl_name[0]][metric_name].append({
             'val': metric.compute(),
-            'subcat': dl_name[-1] if len(dl_name) == 3 else 'no_subcat'
+            'subcat': dl_name[-1] if len(dl_name) == 3 else 'no_subcat',
         })
 
-    df = pd.DataFrame(columns=[
-        'Category', 'Benchmark', 'Subtask', 'Accuracy', 'Number few shot',
-        'Model'
-    ])
+    df = pd.DataFrame(
+        columns=[
+            'Category',
+            'Benchmark',
+            'Subtask',
+            'Accuracy',
+            'Number few shot',
+            'Model',
+        ],
+    )
 
     for num_shot in results:
         for benchmark in results[num_shot]:
@@ -450,7 +483,7 @@ def calculate_markdown_results(logger_keys: List[str], trainer: Trainer,
                         'Subtask': None,
                         'Accuracy': subscores[0]['val'],
                         'Number few shot': num_shot,
-                        'Model': model_name
+                        'Model': model_name,
                     }
                     df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
                 else:
@@ -466,7 +499,7 @@ def calculate_markdown_results(logger_keys: List[str], trainer: Trainer,
                         'Number few shot':
                             num_shot,
                         'Model':
-                            model_name
+                            model_name,
                     }
                     df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
                     for sub in subscores:
@@ -482,7 +515,7 @@ def calculate_markdown_results(logger_keys: List[str], trainer: Trainer,
                             'Number few shot':
                                 num_shot,
                             'Model':
-                                model_name
+                                model_name,
                         }
                         df = pd.concat([df, pd.DataFrame([row])],
                                        ignore_index=True)

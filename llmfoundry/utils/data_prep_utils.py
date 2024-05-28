@@ -8,6 +8,11 @@ from typing import List, Optional
 
 from composer.utils import ObjectStore
 
+__all__ = [
+    'merge_shard_groups',
+    'DownloadingIterable',
+]
+
 
 def with_id(basename: str, shard_id: int) -> str:
     """Get a new basename with the given shard_id.
@@ -88,7 +93,7 @@ class DownloadingIterable:
         Args:
             object_names (List[str]): Names of objects to download
             output_folder (str): Local folder to write downloaded files to
-            object_store (Optiona[ObjectStore]): Object store to download from
+            object_store (Optional[ObjectStore]): Object store to download from
         """
         self.object_names = object_names
         self.object_store = object_store
@@ -101,11 +106,15 @@ class DownloadingIterable:
 
             # Download objects if remote path.
             if self.object_store is not None:
-                output_filename = os.path.join(self.output_folder,
-                                               object_name.strip('/'))
-                self.object_store.download_object(object_name=object_name,
-                                                  filename=output_filename,
-                                                  overwrite=True)
+                output_filename = os.path.join(
+                    self.output_folder,
+                    object_name.strip('/'),
+                )
+                self.object_store.download_object(
+                    object_name=object_name,
+                    filename=output_filename,
+                    overwrite=True,
+                )
 
             with open(output_filename) as _txt_file:
                 txt = _txt_file.read()
