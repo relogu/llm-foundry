@@ -155,7 +155,11 @@ def log_config(cfg: DictConfig) -> None:
         except ImportError as e:
             raise e
         if wandb.run:
-            wandb.config.update(om.to_container(cfg, resolve=True))
+            # NOTE: Allow val change is set to True to allow for hyperparameter logging
+            # when resuming a run.
+            wandb.config.update(
+                om.to_container(cfg, resolve=True), allow_val_change=True
+            )
 
     if 'mlflow' in cfg.get('loggers', {}):
         try:
