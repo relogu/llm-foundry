@@ -28,6 +28,7 @@ from llmfoundry.callbacks.resumption_callbacks import (
     LayerFreezing,
 )
 from llmfoundry.callbacks.scheduled_gc_callback import ScheduledGarbageCollector
+from llmfoundry.callbacks.activation_monitor_full_model import ActivationMonitorFullModel
 from llmfoundry.registry import callbacks, callbacks_with_config
 
 callbacks.register('lr_monitor', func=LRMonitor)
@@ -47,6 +48,8 @@ callbacks.register('scheduled_gc', func=ScheduledGarbageCollector)
 callbacks.register('oom_observer', func=OOMObserver)
 callbacks.register('eval_output_logging', func=EvalOutputLogging)
 callbacks.register('mbmoe_tok_per_expert', func=MegaBlocksMoE_TokPerExpert)
+# Add our custom full model activation monitor
+callbacks.register('activation_monitor_full_model', func=ActivationMonitorFullModel)
 
 callbacks_with_config.register('async_eval', func=AsyncEval)
 callbacks_with_config.register('curriculum_learning', func=CurriculumLearning)
