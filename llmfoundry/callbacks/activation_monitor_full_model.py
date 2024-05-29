@@ -1,4 +1,4 @@
-# Copyright 2022 MosaicML Composer authors
+# Copyright 2022 MosaicML Composer authors & Flower Labs
 # SPDX-License-Identifier: Apache-2.0
 
 """Monitor activation values during training."""
@@ -6,7 +6,7 @@
 from collections import defaultdict
 import warnings
 from functools import partial
-from typing import Any, List, Optional, Sequence, Union
+from typing import Any, Dict, List, Optional, Sequence, Union
 import numpy as np
  
 import torch
@@ -19,17 +19,18 @@ __all__ = ['ActivationMonitorFullModel']
 
 
 class ActivationMonitorFullModel(Callback):
-    """Logs stats of activation inputs and outputs.
+    """Logs stats of activation inputs and outputs on the full model.
 
     This callback triggers at a user defined interval, and logs some simple statistics of the inputs, outputs for every
     torch module. This is done by attaching a forward hook to the module. Additionally, when after we finish logging
-    we detach the forwards hook.
+    we detach the forwards hook. The statistics logged are measured across layers in the full model as such they describe
+    global observations of the model.
 
     Example:
         .. doctest::
 
             >>> from composer import Trainer
-            >>> from composer.callbacks import ActivationMonitor
+            >>> from composer.callbacks import ActivationMonitorFullModel
             >>> # constructing trainer object with this callback
             >>> trainer = Trainer(
             ...     model=model,
@@ -37,7 +38,7 @@ class ActivationMonitorFullModel(Callback):
             ...     eval_dataloader=eval_dataloader,
             ...     optimizers=optimizer,
             ...     max_duration="1ep",
-            ...     callbacks=[ActivationMonitor()],
+            ...     callbacks=[ActivationMonitorFullModel()],
             ... )
 
     The metrics are logged by the :class:`.Logger` to the following keys described below. Over an input of shape
@@ -47,37 +48,93 @@ class ActivationMonitorFullModel(Callback):
         +-------------------------------------------------------+-----------------------------------------------------+
         | Key                                                   | Logged data                                         |
         +=======================================================+=====================================================+
-        |                                                       | The average max value of the `hid_dim` of the       |
-        | ``activations/max/MODULE_NAME/input_{n}``             | nth input activations into the current module.      |
+        |                                                       | The global L2 Norm of the `hid_dim` of the          |
+        | ``activations/l2_norm/full_model_input``              | input activations of the entire model.              |
         |                                                       |                                                     |
         +-------------------------------------------------------+-----------------------------------------------------+
-        |                                                       | The average value of the `hid_dim` input            |
-        | ``activations/average/MODULE_NAME/input_{n}``         | activations into the current module.                |
+        |                                                       | The max value of the `hid_dim` across               |
+        | ``activations/max/full_model_input``                  | all the input activations of the entire model.      |
         |                                                       |                                                     |
         +-------------------------------------------------------+-----------------------------------------------------+
-        |                                                       | The average L2 Norm of the `hid_dim` of the         |
-        | ``activations/l2_norm/MODULE_NAME/input_{n}``         | nth input activations into the current module.      |
+        |                                                       | The max across layers of the average value of the   |
+        | ``activations/average/max/full_model_input``          | `hid_dim` input activations of the entire model.    |
         |                                                       |                                                     |
         +-------------------------------------------------------+-----------------------------------------------------+
-        |                                                       | The average kurtosis of the `hid_dim` of the nth    |
-        | ``activations/kurtosis/MODULE_NAME/input_{n}``        | input activations into the current module.          |
+        |                                                       | The min across layers of the average value of the   |
+        | ``activations/average/min/full_model_input``          | `hid_dim` input activations of the entire model.    |
         |                                                       |                                                     |
         +-------------------------------------------------------+-----------------------------------------------------+
-        |                                                       | The average max value of the `hid_dim` of the       |
-        | ``activations/max/MODULE_NAME/output_{n}``            | nth ouput activations of the current module.        |
+        |                                                       | The median across layers of the average value of the|
+        | ``activations/average/median/full_model_input``       | `hid_dim` input activations of the entire model.    |
         |                                                       |                                                     |
         +-------------------------------------------------------+-----------------------------------------------------+
-        |                                                       | The average value of the `hid_dim` of the output    |
-        | ``activations/average/MODULE_NAME/output_{n}``        | activations of the current module.                  |
+        |                                                       | The max across layers of the average skewness of the|
+        | ``activations/skewness/max/full_model_input``         | `hid_dim` input activations of the entire model.    |
         |                                                       |                                                     |
         +-------------------------------------------------------+-----------------------------------------------------+
-        |                                                       | The average L2 Norm of the values of the `hid_dim`  |
-        | ``activations/l2_norm/MODULE_NAME/input_{n}``         | activations of the current module.                  |
+        |                                                       | The min across layers of the average skewness of the|
+        | ``activations/skewness/min/full_model_input``         | `hid_dim` input activations of the entire model.    |
         |                                                       |                                                     |
         +-------------------------------------------------------+-----------------------------------------------------+
-        |                                                       | The average kurtosis of the `hid_dim` of the nth    |
-        | ``activations/kurtosis/MODULE_NAME/input_{n}``        | output activations of the current module.           |
+        |                                                       | The median across layers of the average skewness of |
+        | ``activations/skewness/median/full_model_input``      | the `hid_dim` input activations of the entire model.|
         |                                                       |                                                     |
+        +-------------------------------------------------------+-----------------------------------------------------+
+        |                                                       | The max across layers of the average kurtosis of the|
+        | ``activations/kurtosis/max/full_model_input``         | `hid_dim` input activations of the entire model.    |
+        |                                                       |                                                     |
+        +-------------------------------------------------------+-----------------------------------------------------+
+        |                                                       | The min across layers of the average kurtosis of the|
+        | ``activations/kurtosis/min/full_model_input``         | `hid_dim` input activations of the entire model.    |
+        |                                                       |                                                     |
+        +-------------------------------------------------------+-----------------------------------------------------+
+        |                                                       | The median across layers of the average kurtosis of |
+        | ``activations/kurtosis/median/full_model_input``      | the `hid_dim` input activations of the entire model.|
+        |                                                       |                                                     |
+        +-------------------------------------------------------+-----------------------------------------------------+
+        |                                                       | The global L2 Norm of the `hid_dim` of the          |
+        | ``activations/l2_norm/full_model_output``             | output activations of the entire model.             |
+        |                                                       |                                                     |
+        +-------------------------------------------------------+-----------------------------------------------------+
+        |                                                       | The max value of the `hid_dim` across               |
+        | ``activations/max/full_model_output``                 | all the output activations of the entire model.     |
+        |                                                       |                                                     |
+        +-------------------------------------------------------+-----------------------------------------------------+
+        |                                                       | The max across layers of the average value of the   |
+        | ``activations/average/max/full_model_output``         | `hid_dim` output activations of the entire model.   |
+        |                                                       |                                                     |
+        +-------------------------------------------------------+-----------------------------------------------------+
+        |                                                       | The min across layers of the average value of the   |
+        | ``activations/average/min/full_model_output``         | `hid_dim` output activations of the entire model.   |
+        |                                                       |                                                     |
+        +-------------------------------------------------------+-----------------------------------------------------+
+        |                                                       | The median across layers of the average value of the|
+        | ``activations/average/median/full_model_output``      | `hid_dim` output activations of the entire model.   |
+        |                                                       |                                                     |
+        +-------------------------------------------------------+-----------------------------------------------------+
+        |                                                       | The max across layers of the average skewness of the|
+        | ``activations/skewness/max/full_model_output``        | `hid_dim` output activations of the entire model.   |
+        |                                                       |                                                     |
+        +-------------------------------------------------------+-----------------------------------------------------+
+        |                                                       | The min across layers of the average skewness of the|
+        | ``activations/skewness/min/full_model_output``        | `hid_dim` output activations of the entire model.   |
+        |                                                       |                                                     |
+        +-------------------------------------------------------+-----------------------------------------------------+
+        |                                                       | The median across layers of the average skewness of |
+        | ``activations/skewness/median/full_model_output``     | the `hid_dim` output activations of the entire      |
+        |                                                       | model.                                              |
+        +-------------------------------------------------------+-----------------------------------------------------+
+        |                                                       | The max across layers of the average kurtosis of the|
+        | ``activations/kurtosis/max/full_model_output``        | `hid_dim` output activations of the entire model.   |
+        |                                                       |                                                     |
+        +-------------------------------------------------------+-----------------------------------------------------+
+        |                                                       | The min across layers of the average kurtosis of the|
+        | ``activations/kurtosis/min/full_model_output``        | `hid_dim` output activations of the entire model.   |
+        |                                                       |                                                     |
+        +-------------------------------------------------------+-----------------------------------------------------+
+        |                                                       | The median across layers of the average kurtosis of |
+        | ``activations/kurtosis/median/full_model_output``     | the `hid_dim` output activations of the entire      |
+        |                                                       | model.                                              |
         +-------------------------------------------------------+-----------------------------------------------------+
 
     Args:
@@ -87,7 +144,7 @@ class ActivationMonitorFullModel(Callback):
             For example passing in the list ['dropout', 'ln'] will cause the class attributes that contain
             'dropout' or 'ln' to not be logged. Default: 'None'.
         only_log_wandb (bool, optional): A bool that determines if we should only log to Weights and Biases. This is recommended
-            in partcular for larger models as this callback logs a lot. Default: 'True'.
+            in particular for larger models as this callback logs a lot. Default: 'True'.
     """
 
     def __init__(
@@ -169,15 +226,13 @@ class ActivationMonitorFullModel(Callback):
                 if ignore_module_type in module_name:
                     return
 
-        metrics = defaultdict(float)
-        
-       
+        metrics: Dict[str, Any] = defaultdict(float) 
         if input is not None:
             for i, val in enumerate(input):
                 if val is None or isinstance(val, dict):
                     continue
                 if isinstance(val, str) and isinstance(input, dict):
-                    self.recursively_add_metrics(metrics, module_name, '_input', i, output[val])  # type: ignore
+                    self.recursively_add_metrics(metrics, module_name, '_input', i, input[val])  # type: ignore
                 else:
                     self.recursively_add_metrics(metrics, module_name, '_input', i, val)
 
@@ -186,15 +241,34 @@ class ActivationMonitorFullModel(Callback):
                 if val is None or isinstance(val, dict):
                     continue
                 if isinstance(val, str) and isinstance(output, dict):
-                    self.recursively_add_metrics(metrics, module_name, '_output', i,output[val])  # type: ignore
+                    self.recursively_add_metrics(metrics, module_name, '_output', i, output[val])  # type: ignore
                 else:
-                    self.recursively_add_metrics(metrics, module_name, '_output', i,val)
+                    self.recursively_add_metrics(metrics, module_name, '_output', i, val)
                  
-        metrics['activations/l2_norm/full_model_input']  = float(np.sqrt(metrics['activations/l2_norm/full_model_input']))
-        metrics['activations/l2_norm/full_model_output']  = float(np.sqrt(metrics['activations/l2_norm/full_model_output']))
-     
+        metrics['activations/l2_norm/full_model_input'] = float(np.sqrt(metrics['activations/l2_norm/full_model_input']))
+        metrics['activations/max/full_model_input'] = max(metrics['activations/max/full_model_input'])
+        metrics['activations/average/max/full_model_input'] = max(metrics['activations/average/full_model_input'])
+        metrics['activations/average/min/full_model_input'] = min(metrics['activations/average/full_model_input'])
+        metrics['activations/average/median/full_model_input'] = np.median(metrics['activations/average/full_model_input'])
+        metrics['activations/skewness/max/full_model_input'] = max(metrics['activations/skewness/full_model_input'])
+        metrics['activations/skewness/min/full_model_input'] = min(metrics['activations/skewness/full_model_input'])
+        metrics['activations/skewness/median/full_model_input'] = np.median(metrics['activations/skewness/full_model_input'])
+        metrics['activations/kurtosis/max/full_model_input'] = max(metrics['activations/kurtosis/full_model_input'])
+        metrics['activations/kurtosis/min/full_model_input'] = min(metrics['activations/kurtosis/full_model_input'])
+        metrics['activations/kurtosis/median/full_model_input'] = np.median(metrics['activations/kurtosis/full_model_input'])
+        
+        metrics['activations/l2_norm/full_model_output'] = float(np.sqrt(metrics['activations/l2_norm/full_model_output']))
+        metrics['activations/max/full_model_output'] = max(metrics['activations/max/full_model_output'])
+        metrics['activations/average/max/full_model_output'] = max(metrics['activations/average/full_model_output'])
+        metrics['activations/average/min/full_model_output'] = min(metrics['activations/average/full_model_output'])
+        metrics['activations/average/median/full_model_output'] = np.median(metrics['activations/average/full_model_output'])
+        metrics['activations/skewness/max/full_model_output'] = max(metrics['activations/skewness/full_model_output'])
+        metrics['activations/skewness/min/full_model_output'] = min(metrics['activations/skewness/full_model_output'])
+        metrics['activations/skewness/median/full_model_output'] = np.median(metrics['activations/skewness/full_model_output'])
+        metrics['activations/kurtosis/max/full_model_output'] = max(metrics['activations/kurtosis/full_model_output'])
+        metrics['activations/kurtosis/min/full_model_output'] = min(metrics['activations/kurtosis/full_model_output'])
+        metrics['activations/kurtosis/median/full_model_output'] = np.median(metrics['activations/kurtosis/full_model_output'])
                     
-        # TODO: switch back to logging the normal metrics dict if necessary
         if self.only_log_wandb:
             wandb_loggers = [ld for ld in logger.destinations if isinstance(ld, WandBLogger)]
             if len(wandb_loggers):
@@ -208,7 +282,7 @@ class ActivationMonitorFullModel(Callback):
             logger.log_metrics(metrics)
 
     def recursively_add_metrics(self, metrics: dict, name: str, suffix: str, index: int, values: Any):
-        # Becuase of the recursive diving, we need this call to prevent infinite recursion.
+        # Because of the recursive diving, we need this call to prevent infinite recursion.
         if isinstance(values, str):
             return
         # Keep recursively diving if the value is a sequence
@@ -225,16 +299,31 @@ class ActivationMonitorFullModel(Callback):
             return
         if value.is_floating_point() or value.is_complex():
             metrics[f'activations/l2_norm/full_model{suffix}'] += (value.detach() ** 2).sum().item()
-            # TODO: add back in if necessary
-            # metrics[f'activations/l2_norm/{name}{suffix}'] = np.sqrt(metrics[f'activations/sum_of_squares/{name}{suffix}'])
-            # metrics[f'activations/average/{name}{suffix}'] = value.mean().item()
-            # metrics[f'activations/kurtosis/{name}{suffix}'] = compute_kurtosis(value).item()
-
-            # # Because we call max with `dim=-1` we need to call .values to get the actual values
-            # metrics[f'activations/max/{name}{suffix}'] = value.max(dim=-1).values.mean().item()
+            if f'activations/average/full_model{suffix}' not in metrics:
+                metrics[f'activations/average/full_model{suffix}'] = []
+            metrics[f'activations/average/{name}{suffix}'].append(value.mean().item())
+            if f'activations/skewness/full_model{suffix}' not in metrics:
+                metrics[f'activations/skewness/full_model{suffix}'] = []
+            metrics[f'activations/skewness/full_model{suffix}'].append(compute_skewness(value).item())
+            if f'activations/kurtosis/full_model{suffix}' not in metrics:
+                metrics[f'activations/kurtosis/full_model{suffix}'] = []
+            metrics[f'activations/kurtosis/full_model{suffix}'].append(compute_kurtosis(value).item())
+            # Because we call max with `dim=-1` we need to call .values to get the actual values
+            if f'activations/max/full_model{suffix}' not in metrics:
+                metrics[f'activations/max/full_model{suffix}'] = []
+            metrics[f'activations/max/full_model{suffix}'].append(value.max(dim=-1).values.mean().item())
 
     def create_module_names(self, model: torch.nn.Module):
         self.module_names = {m: name for name, m in model.named_modules()}
+
+
+def compute_skewness(value: torch.Tensor):
+    # Computes the skewness over the last dimension
+    mean = torch.mean(value, dim=-1).unsqueeze(-1)
+    diffs = value - mean
+    m_3 = torch.mean(torch.pow(diffs, 3), dim=-1)
+    var = torch.mean(torch.pow(diffs, 2), dim=-1)
+    return (m_3 / (var**2)).mean()
 
 
 def compute_kurtosis(value: torch.Tensor):
