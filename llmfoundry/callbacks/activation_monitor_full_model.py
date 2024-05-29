@@ -301,7 +301,7 @@ class ActivationMonitorFullModel(Callback):
             metrics[f'activations/l2_norm/full_model{suffix}'] += (value.detach() ** 2).sum().item()
             if f'activations/average/full_model{suffix}' not in metrics:
                 metrics[f'activations/average/full_model{suffix}'] = []
-            metrics[f'activations/average/{name}{suffix}'].append(value.mean().item())
+            metrics[f'activations/average/full_model{suffix}'].append(value.mean().item())
             if f'activations/skewness/full_model{suffix}' not in metrics:
                 metrics[f'activations/skewness/full_model{suffix}'] = []
             metrics[f'activations/skewness/full_model{suffix}'].append(compute_skewness(value).item())
