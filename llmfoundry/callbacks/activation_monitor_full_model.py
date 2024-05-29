@@ -244,30 +244,14 @@ class ActivationMonitorFullModel(Callback):
                     self.recursively_add_metrics(metrics, module_name, '_output', i, output[val])  # type: ignore
                 else:
                     self.recursively_add_metrics(metrics, module_name, '_output', i, val)
-                 
-        metrics['activations/l2_norm/full_model_input'] = float(np.sqrt(metrics['activations/l2_norm/full_model_input']))
-        metrics['activations/max/full_model_input'] = max(metrics['activations/max/full_model_input'])
-        metrics['activations/average/max/full_model_input'] = max(metrics['activations/average/full_model_input'])
-        metrics['activations/average/min/full_model_input'] = min(metrics['activations/average/full_model_input'])
-        metrics['activations/average/median/full_model_input'] = np.median(metrics['activations/average/full_model_input'])
-        metrics['activations/skewness/max/full_model_input'] = max(metrics['activations/skewness/full_model_input'])
-        metrics['activations/skewness/min/full_model_input'] = min(metrics['activations/skewness/full_model_input'])
-        metrics['activations/skewness/median/full_model_input'] = np.median(metrics['activations/skewness/full_model_input'])
-        metrics['activations/kurtosis/max/full_model_input'] = max(metrics['activations/kurtosis/full_model_input'])
-        metrics['activations/kurtosis/min/full_model_input'] = min(metrics['activations/kurtosis/full_model_input'])
-        metrics['activations/kurtosis/median/full_model_input'] = np.median(metrics['activations/kurtosis/full_model_input'])
         
-        metrics['activations/l2_norm/full_model_output'] = float(np.sqrt(metrics['activations/l2_norm/full_model_output']))
-        metrics['activations/max/full_model_output'] = max(metrics['activations/max/full_model_output'])
-        metrics['activations/average/max/full_model_output'] = max(metrics['activations/average/full_model_output'])
-        metrics['activations/average/min/full_model_output'] = min(metrics['activations/average/full_model_output'])
-        metrics['activations/average/median/full_model_output'] = np.median(metrics['activations/average/full_model_output'])
-        metrics['activations/skewness/max/full_model_output'] = max(metrics['activations/skewness/full_model_output'])
-        metrics['activations/skewness/min/full_model_output'] = min(metrics['activations/skewness/full_model_output'])
-        metrics['activations/skewness/median/full_model_output'] = np.median(metrics['activations/skewness/full_model_output'])
-        metrics['activations/kurtosis/max/full_model_output'] = max(metrics['activations/kurtosis/full_model_output'])
-        metrics['activations/kurtosis/min/full_model_output'] = min(metrics['activations/kurtosis/full_model_output'])
-        metrics['activations/kurtosis/median/full_model_output'] = np.median(metrics['activations/kurtosis/full_model_output'])
+        for suffix in ['_input', '_output']:
+            metrics[f'activations/l2_norm/full_model{suffix}'] = float(np.sqrt(metrics[f'activations/l2_norm/full_model{suffix}']))
+            metrics[f'activations/max/full_model{suffix}'] = max(metrics[f'activations/max/full_model{suffix}'])
+            for metric_name in ['average', 'skewness', 'kurtosis']:
+                metrics[f'activations/{metric_name}/max/full_model{suffix}'] = max(metrics[f'activations/{metric_name}/full_model{suffix}'])
+                metrics[f'activations/{metric_name}/min/full_model{suffix}'] = min(metrics[f'activations/{metric_name}/full_model{suffix}'])
+                metrics[f'activations/{metric_name}/median/full_model{suffix}'] = np.median(metrics[f'activations/{metric_name}/full_model{suffix}'])
                     
         if self.only_log_wandb:
             wandb_loggers = [ld for ld in logger.destinations if isinstance(ld, WandBLogger)]
