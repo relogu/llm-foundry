@@ -227,6 +227,7 @@ class ActivationMonitorFullModel(Callback):
                     return
 
         metrics: Dict[str, Any] = {}
+        suffixes: List[str] = []
         if input is not None:
             for val in input:
                 if val is None or isinstance(val, dict):
@@ -235,6 +236,7 @@ class ActivationMonitorFullModel(Callback):
                     self.recursively_add_metrics(metrics, '_input', input[val])  # type: ignore
                 else:
                     self.recursively_add_metrics(metrics, '_input', val)
+            suffixes.append('_input')
 
         if output is not None:
             for val in output: 
@@ -244,8 +246,9 @@ class ActivationMonitorFullModel(Callback):
                     self.recursively_add_metrics(metrics, '_output', output[val])  # type: ignore
                 else:
                     self.recursively_add_metrics(metrics, '_output', val)
+            suffixes.append('_output')
         
-        for suffix in ['_input', '_output']:
+        for suffix in suffixes:
             metrics[f'activations/l2_norm/full_model{suffix}'] = float(np.sqrt(metrics[f'activations/l2_norm/full_model{suffix}']))
             metrics[f'activations/max/full_model{suffix}'] = float(np.max(metrics[f'activations/max/full_model{suffix}']))
             for metric_name in ['average', 'skewness', 'kurtosis']:
