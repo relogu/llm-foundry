@@ -248,10 +248,12 @@ class ActivationMonitorFullModel(Callback):
         for suffix in ['_input', '_output']:
             metrics[f'activations/l2_norm/full_model{suffix}'] = float(np.sqrt(metrics[f'activations/l2_norm/full_model{suffix}']))
             metrics[f'activations/max/full_model{suffix}'] = float(np.max(metrics[f'activations/max/full_model{suffix}']))
+            metrics.pop(f'activations/max/full_model{suffix}')
             for metric_name in ['average', 'skewness', 'kurtosis']:
                 metrics[f'activations/{metric_name}/max/full_model{suffix}'] = float(np.max(metrics[f'activations/{metric_name}/full_model{suffix}']))
                 metrics[f'activations/{metric_name}/min/full_model{suffix}'] = float(np.min(metrics[f'activations/{metric_name}/full_model{suffix}']))
                 metrics[f'activations/{metric_name}/median/full_model{suffix}'] = float(np.median(metrics[f'activations/{metric_name}/full_model{suffix}']))
+                metrics.pop(f'activations/{metric_name}/full_model{suffix}')
                     
         if self.only_log_wandb:
             wandb_loggers = [ld for ld in logger.destinations if isinstance(ld, WandBLogger)]
