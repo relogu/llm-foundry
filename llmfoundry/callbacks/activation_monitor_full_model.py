@@ -248,7 +248,6 @@ class ActivationMonitorFullModel(Callback):
         for suffix in ['_input', '_output']:
             metrics[f'activations/l2_norm/full_model{suffix}'] = float(np.sqrt(metrics[f'activations/l2_norm/full_model{suffix}']))
             metrics[f'activations/max/full_model{suffix}'] = float(np.max(metrics[f'activations/max/full_model{suffix}']))
-            metrics.pop(f'activations/max/full_model{suffix}')
             for metric_name in ['average', 'skewness', 'kurtosis']:
                 metrics[f'activations/{metric_name}/max/full_model{suffix}'] = float(np.max(metrics[f'activations/{metric_name}/full_model{suffix}']))
                 metrics[f'activations/{metric_name}/min/full_model{suffix}'] = float(np.min(metrics[f'activations/{metric_name}/full_model{suffix}']))
@@ -285,15 +284,19 @@ class ActivationMonitorFullModel(Callback):
             return
         if value.is_floating_point() or value.is_complex():
             metrics[f'activations/l2_norm/full_model{suffix}'] += (value.detach() ** 2).sum().item()
+            
             if f'activations/average/full_model{suffix}' not in metrics:
                 metrics[f'activations/average/full_model{suffix}'] = []
             metrics[f'activations/average/full_model{suffix}'].append(value.mean().item())
+            
             if f'activations/skewness/full_model{suffix}' not in metrics:
                 metrics[f'activations/skewness/full_model{suffix}'] = []
             metrics[f'activations/skewness/full_model{suffix}'].append(compute_skewness(value).item())
+            
             if f'activations/kurtosis/full_model{suffix}' not in metrics:
                 metrics[f'activations/kurtosis/full_model{suffix}'] = []
             metrics[f'activations/kurtosis/full_model{suffix}'].append(compute_kurtosis(value).item())
+            
             # Because we call max with `dim=-1` we need to call .values to get the actual values
             if f'activations/max/full_model{suffix}' not in metrics:
                 metrics[f'activations/max/full_model{suffix}'] = []

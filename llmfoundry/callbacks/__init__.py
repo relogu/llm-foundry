@@ -11,6 +11,7 @@ from composer.callbacks import (
     OptimizerMonitor,
     RuntimeEstimator,
     SpeedMonitor,
+    ActivationMonitor,
 )
 
 from llmfoundry.callbacks.async_eval_callback import AsyncEval
@@ -50,6 +51,7 @@ callbacks.register('eval_output_logging', func=EvalOutputLogging)
 callbacks.register('mbmoe_tok_per_expert', func=MegaBlocksMoE_TokPerExpert)
 # Add our custom full model activation monitor
 callbacks.register('activation_monitor_full_model', func=ActivationMonitorFullModel)
+callbacks.register('activation_monitor', func=ActivationMonitor)
 
 callbacks_with_config.register('async_eval', func=AsyncEval)
 callbacks_with_config.register('curriculum_learning', func=CurriculumLearning)
