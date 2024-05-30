@@ -163,7 +163,7 @@ class ActivationMonitorFullModel(Callback):
 
         if self.interval.unit == TimeUnit.BATCH and self.interval < Time.from_timestring('10ba'):
             warnings.warn(
-                f'Currently the ActivationMonitor`s interval is set to {self.interval} '
+                f'Currently the ActivationMonitorFullModel`s interval is set to {self.interval} '
                 f'which is below our recommended value of 10ba. We recommend you raise '
                 f'the interval to at least 10ba, as the activation monitor adds extra overhead '
                 f'and decreases throughput.',
@@ -226,24 +226,24 @@ class ActivationMonitorFullModel(Callback):
                 if ignore_module_type in module_name:
                     return
 
-        metrics: Dict[str, Any] = defaultdict(float) 
+        metrics: Dict[str, Any] = {}
         if input is not None:
-            for i, val in enumerate(input):
+            for val in input:
                 if val is None or isinstance(val, dict):
                     continue
                 if isinstance(val, str) and isinstance(input, dict):
-                    self.recursively_add_metrics(metrics, module_name, '_input', i, input[val])  # type: ignore
+                    self.recursively_add_metrics(metrics, '_input', input[val])  # type: ignore
                 else:
-                    self.recursively_add_metrics(metrics, module_name, '_input', i, val)
+                    self.recursively_add_metrics(metrics, '_input', val)
 
         if output is not None:
-            for i, val in enumerate(output): 
+            for val in output: 
                 if val is None or isinstance(val, dict):
                     continue
                 if isinstance(val, str) and isinstance(output, dict):
-                    self.recursively_add_metrics(metrics, module_name, '_output', i, output[val])  # type: ignore
+                    self.recursively_add_metrics(metrics, '_output', output[val])  # type: ignore
                 else:
-                    self.recursively_add_metrics(metrics, module_name, '_output', i, val)
+                    self.recursively_add_metrics(metrics, '_output', val)
         
         for suffix in ['_input', '_output']:
             metrics[f'activations/l2_norm/full_model{suffix}'] = float(np.sqrt(metrics[f'activations/l2_norm/full_model{suffix}']))
@@ -266,41 +266,43 @@ class ActivationMonitorFullModel(Callback):
         else:
             logger.log_metrics(metrics)
 
-    def recursively_add_metrics(self, metrics: dict, name: str, suffix: str, index: int, values: Any):
+    def recursively_add_metrics(self, metrics: dict, suffix: str, values: Any):
         # Because of the recursive diving, we need this call to prevent infinite recursion.
         if isinstance(values, str):
             return
         # Keep recursively diving if the value is a sequence
         if isinstance(values, Sequence):
-            for i, value in enumerate(values):
-                self.recursively_add_metrics(metrics, f'{name}_{i}', suffix,index, value)
+            for value in values:
+                self.recursively_add_metrics(metrics, suffix, value)
             return
         else:
-            self.add_metrics(metrics, name, suffix, index, values)
+            self.add_metrics(metrics, suffix, values)
 
-    def add_metrics(self, metrics: dict, name: str, suffix: str, index: int, value: torch.Tensor):
+    def add_metrics(self, metrics: dict, suffix: str, value: torch.Tensor):
         # We shouldn't log booleans
         if isinstance(value, bool) or value.dtype == torch.bool:
             return
         if value.is_floating_point() or value.is_complex():
-            metrics[f'activations/l2_norm/full_model{suffix}'] += (value.detach() ** 2).sum().item()
+            if f'activations/l2_norm/full_model{suffix}' not in metrics:
+                metrics[f'activations/l2_norm/full_model{suffix}'] = .0
+            metrics[f'activations/l2_norm/full_model{suffix}'] += float((value.detach() ** 2).sum().item())
             
             if f'activations/average/full_model{suffix}' not in metrics:
                 metrics[f'activations/average/full_model{suffix}'] = []
-            metrics[f'activations/average/full_model{suffix}'].append(value.mean().item())
+            metrics[f'activations/average/full_model{suffix}'].append(float(value.mean().item()))
             
             if f'activations/skewness/full_model{suffix}' not in metrics:
                 metrics[f'activations/skewness/full_model{suffix}'] = []
-            metrics[f'activations/skewness/full_model{suffix}'].append(compute_skewness(value).item())
+            metrics[f'activations/skewness/full_model{suffix}'].append(float(compute_skewness(value).item()))
             
             if f'activations/kurtosis/full_model{suffix}' not in metrics:
                 metrics[f'activations/kurtosis/full_model{suffix}'] = []
-            metrics[f'activations/kurtosis/full_model{suffix}'].append(compute_kurtosis(value).item())
+            metrics[f'activations/kurtosis/full_model{suffix}'].append(float(compute_kurtosis(value).item()))
             
             # Because we call max with `dim=-1` we need to call .values to get the actual values
             if f'activations/max/full_model{suffix}' not in metrics:
                 metrics[f'activations/max/full_model{suffix}'] = []
-            metrics[f'activations/max/full_model{suffix}'].append(value.max(dim=-1).values.mean().item())
+            metrics[f'activations/max/full_model{suffix}'].append(float(value.max(dim=-1).values.mean().item()))
 
     def create_module_names(self, model: torch.nn.Module):
         self.module_names = {m: name for name, m in model.named_modules()}
