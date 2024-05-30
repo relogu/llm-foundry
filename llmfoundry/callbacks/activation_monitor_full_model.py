@@ -3,10 +3,8 @@
 
 """Monitor activation values during training."""
 
-from logging import INFO
 import warnings
-from functools import partial
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import Any, List, Optional, Sequence, Union
 import numpy as np
  
 import torch
@@ -14,8 +12,6 @@ import torch
 from composer.core import Callback, State, Time, TimeUnit
 from composer.loggers import Logger
 from composer.loggers.wandb_logger import WandBLogger
-
-from flwr.common import log
 
 __all__ = ['ActivationMonitorFullModel']
 
@@ -180,43 +176,64 @@ class ActivationMonitorFullModel(Callback):
 
         self.last_train_time_value_logged = -1
         self.module_names = {}
+        self.metrics = {}
 
     def before_forward(self, state: State, logger: Logger):
+        del logger
         current_time_value = state.timestamp.get(self.interval.unit).value
 
         if current_time_value % self.interval.value == 0 and current_time_value != self.last_train_time_value_logged:
             if not self.module_names:
                 self.create_module_names(state.model)
 
-            self.attach_forward_hooks(state, logger)
+            self.attach_forward_hooks(state)
 
     def after_forward(self, state: State, logger: Logger):
         current_time_value = state.timestamp.get(self.interval.unit).value
 
         if current_time_value % self.interval.value == 0 and current_time_value != self.last_train_time_value_logged:
             self.last_train_time_value_logged = current_time_value
-            self.remove_forward_hooks()
+            self.remove_forward_hooks(logger, state.timestamp.batch.value)
 
-    def attach_forward_hooks(self, state: State, logger: Logger):
-        step = state.timestamp.batch.value
-        self.register_forward_hook(state.model, logger, step)
+    def attach_forward_hooks(self, state: State):
+        self.register_forward_hook(state.model)
 
-    def remove_forward_hooks(self):
+    def remove_forward_hooks(self, logger: Logger, step: Optional[int]):
         for handle in self.handles:
             handle.remove()
         # Resetting handles we track
         self.handles = []
+        # Compute global statistics
+        for suffix in ['_input', '_output']:
+            self.metrics[f'activations/l2_norm/full_model{suffix}'] = float(np.sqrt(self.metrics[f'activations/l2_norm/full_model{suffix}']))
+            self.metrics[f'activations/max/full_model{suffix}'] = float(np.max(self.metrics[f'activations/max/full_model{suffix}']))
+            for metric_name in ['average', 'skewness', 'kurtosis']:
+                self.metrics[f'activations/{metric_name}/max/full_model{suffix}'] = float(np.max(self.metrics[f'activations/{metric_name}/full_model{suffix}']))
+                self.metrics[f'activations/{metric_name}/min/full_model{suffix}'] = float(np.min(self.metrics[f'activations/{metric_name}/full_model{suffix}']))
+                self.metrics[f'activations/{metric_name}/median/full_model{suffix}'] = float(np.median(self.metrics[f'activations/{metric_name}/full_model{suffix}']))
+                self.metrics.pop(f'activations/{metric_name}/full_model{suffix}')
+        # Log the metrics
+        if self.only_log_wandb:
+            wandb_loggers = [ld for ld in logger.destinations if isinstance(ld, WandBLogger)]
+            if len(wandb_loggers):
+                for wandb_logger in wandb_loggers:
+                    wandb_logger.log_metrics(self.metrics, step)
+            else:
+                # In the case there were no WandB loggers, just default to
+                # the standard logger and let it take care of it
+                logger.log_metrics(self.metrics)
+        else:
+            logger.log_metrics(self.metrics)
+        self.metrics = {}
 
-    def register_forward_hook(self, model: torch.nn.Module, logger: Logger, step: Optional[int]):
-        model.apply(partial(self._register_forward_hook, logger, step))
+    def register_forward_hook(self, model: torch.nn.Module):
+        model.apply(self._register_forward_hook)
 
-    def _register_forward_hook(self, logger: Logger, step: Optional[int], module: torch.nn.Module):
-        self.handles.append(module.register_forward_hook(partial(self.forward_hook, logger, step)))
+    def _register_forward_hook(self, module: torch.nn.Module):
+        self.handles.append(module.register_forward_hook(self.forward_hook))
 
     def forward_hook(
         self,
-        logger: Logger,
-        step: Optional[int],
         module: torch.nn.Module,
         input: Optional[Sequence],
         output: Optional[Sequence],
@@ -227,88 +244,61 @@ class ActivationMonitorFullModel(Callback):
             for ignore_module_type in self.ignore_module_types:
                 if ignore_module_type in module_name:
                     return
-
-        metrics: Dict[str, Any] = {}
-        suffixes: List[str] = []
         if input is not None:
             for val in input:
                 if val is None or isinstance(val, dict):
                     continue
                 if isinstance(val, str) and isinstance(input, dict):
-                    self.recursively_add_metrics(metrics, '_input', input[val])  # type: ignore
+                    self.recursively_add_metrics('_input', input[val])  # type: ignore
                 else:
-                    self.recursively_add_metrics(metrics, '_input', val)
-            if metrics:
-                suffixes.append('_input')
+                    self.recursively_add_metrics('_input', val)
 
         if output is not None:
             for val in output: 
                 if val is None or isinstance(val, dict):
                     continue
                 if isinstance(val, str) and isinstance(output, dict):
-                    self.recursively_add_metrics(metrics, '_output', output[val])  # type: ignore
+                    self.recursively_add_metrics('_output', output[val])  # type: ignore
                 else:
-                    self.recursively_add_metrics(metrics, '_output', val)
-            suffixes.append('_output')
-        
-        for suffix in suffixes:
-            metrics[f'activations/l2_norm/full_model{suffix}'] = float(np.sqrt(metrics[f'activations/l2_norm/full_model{suffix}']))
-            metrics[f'activations/max/full_model{suffix}'] = float(np.max(metrics[f'activations/max/full_model{suffix}']))
-            for metric_name in ['average', 'skewness', 'kurtosis']:
-                metrics[f'activations/{metric_name}/max/full_model{suffix}'] = float(np.max(metrics[f'activations/{metric_name}/full_model{suffix}']))
-                metrics[f'activations/{metric_name}/min/full_model{suffix}'] = float(np.min(metrics[f'activations/{metric_name}/full_model{suffix}']))
-                metrics[f'activations/{metric_name}/median/full_model{suffix}'] = float(np.median(metrics[f'activations/{metric_name}/full_model{suffix}']))
-                metrics.pop(f'activations/{metric_name}/full_model{suffix}')
-                    
-        if self.only_log_wandb:
-            wandb_loggers = [ld for ld in logger.destinations if isinstance(ld, WandBLogger)]
-            if len(wandb_loggers):
-                for wandb_logger in wandb_loggers:
-                    wandb_logger.log_metrics(metrics, step)
-            else:
-                # In the case there were no WandB loggers, just default to
-                # the standard logger and let it take care of it
-                logger.log_metrics(metrics)
-        else:
-            logger.log_metrics(metrics)
+                    self.recursively_add_metrics('_output', val)
 
-    def recursively_add_metrics(self, metrics: dict, suffix: str, values: Any):
+    def recursively_add_metrics(self, suffix: str, values: Any):
         # Because of the recursive diving, we need this call to prevent infinite recursion.
         if isinstance(values, str):
             return
         # Keep recursively diving if the value is a sequence
         if isinstance(values, Sequence):
             for value in values:
-                self.recursively_add_metrics(metrics, suffix, value)
+                self.recursively_add_metrics(suffix, value)
             return
         else:
-            self.add_metrics(metrics, suffix, values)
+            self.add_metrics(suffix, values)
 
-    def add_metrics(self, metrics: dict, suffix: str, value: torch.Tensor):
+    def add_metrics(self, suffix: str, value: torch.Tensor):
         # We shouldn't log booleans
         if isinstance(value, bool) or value.dtype == torch.bool:
             return
         if value.is_floating_point() or value.is_complex():
-            if f'activations/l2_norm/full_model{suffix}' not in metrics:
-                metrics[f'activations/l2_norm/full_model{suffix}'] = .0
-            metrics[f'activations/l2_norm/full_model{suffix}'] += float((value.detach() ** 2).sum().item())
+            if f'activations/l2_norm/full_model{suffix}' not in self.metrics:
+                self.metrics[f'activations/l2_norm/full_model{suffix}'] = .0
+            self.metrics[f'activations/l2_norm/full_model{suffix}'] += float((value.detach() ** 2).sum().item())
             
-            if f'activations/average/full_model{suffix}' not in metrics:
-                metrics[f'activations/average/full_model{suffix}'] = []
-            metrics[f'activations/average/full_model{suffix}'].append(float(value.detach().mean().item()))
+            if f'activations/average/full_model{suffix}' not in self.metrics:
+                self.metrics[f'activations/average/full_model{suffix}'] = []
+            self.metrics[f'activations/average/full_model{suffix}'].append(float(value.detach().mean().item()))
             
-            if f'activations/skewness/full_model{suffix}' not in metrics:
-                metrics[f'activations/skewness/full_model{suffix}'] = []
-            metrics[f'activations/skewness/full_model{suffix}'].append(float(compute_skewness(value.detach()).item()))
+            if f'activations/skewness/full_model{suffix}' not in self.metrics:
+                self.metrics[f'activations/skewness/full_model{suffix}'] = []
+            self.metrics[f'activations/skewness/full_model{suffix}'].append(float(compute_skewness(value.detach()).item()))
             
-            if f'activations/kurtosis/full_model{suffix}' not in metrics:
-                metrics[f'activations/kurtosis/full_model{suffix}'] = []
-            metrics[f'activations/kurtosis/full_model{suffix}'].append(float(compute_kurtosis(value.detach()).item()))
+            if f'activations/kurtosis/full_model{suffix}' not in self.metrics:
+                self.metrics[f'activations/kurtosis/full_model{suffix}'] = []
+            self.metrics[f'activations/kurtosis/full_model{suffix}'].append(float(compute_kurtosis(value.detach()).item()))
             
             # Because we call max with `dim=-1` we need to call .values to get the actual values
-            if f'activations/max/full_model{suffix}' not in metrics:
-                metrics[f'activations/max/full_model{suffix}'] = []
-            metrics[f'activations/max/full_model{suffix}'].append(float(value.detach().max(dim=-1).values.mean().item()))
+            if f'activations/max/full_model{suffix}' not in self.metrics:
+                self.metrics[f'activations/max/full_model{suffix}'] = []
+            self.metrics[f'activations/max/full_model{suffix}'].append(float(value.detach().max(dim=-1).values.mean().item()))
 
     def create_module_names(self, model: torch.nn.Module):
         self.module_names = {m: name for name, m in model.named_modules()}
