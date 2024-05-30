@@ -3,7 +3,7 @@
 
 """Monitor activation values during training."""
 
-from collections import defaultdict
+from logging import INFO
 import warnings
 from functools import partial
 from typing import Any, Dict, List, Optional, Sequence, Union
@@ -14,6 +14,8 @@ import torch
 from composer.core import Callback, State, Time, TimeUnit
 from composer.loggers import Logger
 from composer.loggers.wandb_logger import WandBLogger
+
+from flwr.common import log
 
 __all__ = ['ActivationMonitorFullModel']
 
@@ -236,7 +238,8 @@ class ActivationMonitorFullModel(Callback):
                     self.recursively_add_metrics(metrics, '_input', input[val])  # type: ignore
                 else:
                     self.recursively_add_metrics(metrics, '_input', val)
-            suffixes.append('_input')
+            if metrics:
+                suffixes.append('_input')
 
         if output is not None:
             for val in output: 
