@@ -289,20 +289,20 @@ class ActivationMonitorFullModel(Callback):
             
             if f'activations/average/full_model{suffix}' not in metrics:
                 metrics[f'activations/average/full_model{suffix}'] = []
-            metrics[f'activations/average/full_model{suffix}'].append(float(value.mean().item()))
+            metrics[f'activations/average/full_model{suffix}'].append(float(value.detach().mean().item()))
             
             if f'activations/skewness/full_model{suffix}' not in metrics:
                 metrics[f'activations/skewness/full_model{suffix}'] = []
-            metrics[f'activations/skewness/full_model{suffix}'].append(float(compute_skewness(value).item()))
+            metrics[f'activations/skewness/full_model{suffix}'].append(float(compute_skewness(value.detach()).item()))
             
             if f'activations/kurtosis/full_model{suffix}' not in metrics:
                 metrics[f'activations/kurtosis/full_model{suffix}'] = []
-            metrics[f'activations/kurtosis/full_model{suffix}'].append(float(compute_kurtosis(value).item()))
+            metrics[f'activations/kurtosis/full_model{suffix}'].append(float(compute_kurtosis(value.detach()).item()))
             
             # Because we call max with `dim=-1` we need to call .values to get the actual values
             if f'activations/max/full_model{suffix}' not in metrics:
                 metrics[f'activations/max/full_model{suffix}'] = []
-            metrics[f'activations/max/full_model{suffix}'].append(float(value.max(dim=-1).values.mean().item()))
+            metrics[f'activations/max/full_model{suffix}'].append(float(value.detach().max(dim=-1).values.mean().item()))
 
     def create_module_names(self, model: torch.nn.Module):
         self.module_names = {m: name for name, m in model.named_modules()}
