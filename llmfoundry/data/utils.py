@@ -24,13 +24,14 @@ def _validate_cfg(cfg: DictConfig, tokenizer: PreTrainedTokenizerBase):
     eos_token_id = cfg.dataset.get('eos_token_id', None)
     bos_token_id = cfg.dataset.get('bos_token_id', None)
 
-    if eos_token_id is None and bos_token_id is None and (
-        hasattr(tokenizer, 'eos_token_id') or
-        hasattr(tokenizer, 'bos_token_id')
-    ):
-        log.warning(
-            'The user has not provided an eos_token_id or bos_token_id, but the tokenizer has an eos_token_id or a bos_token_id.',
-        )
+    # NOTE: Commented out because it is useless and annoying.
+    # if eos_token_id is None and bos_token_id is None and (
+    #     hasattr(tokenizer, 'eos_token_id') or
+    #     hasattr(tokenizer, 'bos_token_id')
+    # ):
+    #     log.warning(
+    #         'The user has not provided an eos_token_id or bos_token_id, but the tokenizer has an eos_token_id or a bos_token_id.',
+    #     )
 
     tokenizer_eos_token_id = getattr(tokenizer, 'eos_token_id', None)
     if eos_token_id is not None and eos_token_id != tokenizer_eos_token_id:
