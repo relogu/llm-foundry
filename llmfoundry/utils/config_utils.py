@@ -91,7 +91,7 @@ def calculate_batch_size_info(
         device_grad_accum = 'auto'
     elif isinstance(device_microbatch_size, int):
         if device_microbatch_size > device_batch_size:
-            log.warn(
+            log.warning(
                 f'device_microbatch_size > device_batch_size, ' +
                 f'will be reduced from {device_microbatch_size} -> {device_batch_size}.',
             )
