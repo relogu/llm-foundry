@@ -66,6 +66,7 @@ def build_evaluators(
     device_eval_batch_size: int,
     icl_seq_len: int,
     icl_subset_num_batches: Optional[int],
+    destination_dir: Optional[str] = None,
 ) -> Tuple[List[Evaluator], List[str], Optional[EvalGauntlet]]:
 
     evaluators = []
@@ -86,6 +87,7 @@ def build_evaluators(
             device_eval_batch_size,
             icl_seq_len,
             icl_subset_num_batches,
+            destination_dir=destination_dir,
         )
         evaluators.extend(icl_evaluators)
 
@@ -146,6 +148,7 @@ def build_icl_data_and_gauntlet(
     device_eval_batch_size: int,
     icl_seq_len: int,
     icl_subset_num_batches: Optional[int] = None,
+    destination_dir: Optional[str] = None,
 ) -> Tuple[List[Evaluator], List[str], Optional[EvalGauntlet]]:
     icl_evaluators, logger_keys = build_icl_evaluators(
         icl_tasks_config,
@@ -153,6 +156,7 @@ def build_icl_data_and_gauntlet(
         icl_seq_len,
         device_eval_batch_size,
         icl_subset_num_batches=icl_subset_num_batches,
+        destination_dir=destination_dir,
     )
     eval_gauntlet_cb = None
     if eval_gauntlet_config is not None:
@@ -584,8 +588,13 @@ def build_icl_evaluators(
             metric_names = list(icl_cfg.metric_names)
             # TODO: fix Composer bug when copying local paths and destination exists
             destination_path = f'{destination_dir}/{icl_cfg.label}-{num_fewshot}.jsonl'
-            if dist.get_local_rank() == 0 and os.path.exists(destination_path):
-                os.remove(destination_path)
+            # NOTE: From a preliminary investigation, it seems that MosaicML developers have not
+            # been sufficiently smart to handle the potential overwrite when it comes to download
+            # one of these datasets from a remote path. As such, they needed to wipe out and
+            # re-create everything, every time, very smart. We will assume that we the files
+            # locally as they don't occupy much disk space.
+            # if dist.get_local_rank() == 0 and os.path.exists(destination_path):
+            #     os.remove(destination_path)
             dist.barrier()
 
             hf_parsing_map = icl_cfg.get('hf_parsing_map', {})
