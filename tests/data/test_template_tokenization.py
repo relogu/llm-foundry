@@ -15,6 +15,9 @@ from llmfoundry.utils.builders import build_tokenizer
 from llmfoundry.utils.exceptions import (
     ALLOWED_PROMPT_KEYS,
     ALLOWED_RESPONSE_KEYS,
+    ChatTemplateError,
+    InvalidExampleTypeError,
+    InvalidMessageTypeError,
 )
 
 
@@ -47,13 +50,13 @@ def test_tokenize_chat_example_malformed():
             'content': 'user message not followed by an assistant label',
         }],
     }
-    wrong_type = {'messages': 'this is not a list of messages'}
+    wrong_example_type = ['this is not a dictionary']
+    wrong_messages_type = {'messages': 'this is not a list of messages'}
     malformed_chat_examples = [
         too_few_messages,
         no_content,
         ends_with_user_role,
         no_assistant_message,
-        wrong_type,
     ]
     my_tokenizer = build_tokenizer('mosaicml/mpt-7b-8k-chat', {})
     for example in malformed_chat_examples:
@@ -62,6 +65,18 @@ def test_tokenize_chat_example_malformed():
                 example,
                 my_tokenizer,
             )  # type: ignore (the typing here is supposed to be malformed)
+    with pytest.raises(InvalidExampleTypeError):
+        # Ignore the type here because it's the mistyping that we're
+        # trying to test.
+        tokenize_formatted_example( # type: ignore
+            wrong_example_type, # type: ignore
+            my_tokenizer, # type: ignore
+        )
+    with pytest.raises(InvalidMessageTypeError):
+        tokenize_formatted_example(
+            wrong_messages_type,
+            my_tokenizer,
+        )
 
 
 def test_tokenize_chat_example_well_formed():
@@ -268,6 +283,39 @@ def test_multi_turn_chat_slicing(tokenizer_name: str, messages_format: bool):
 
     full_chat = tok.apply_chat_template(convo, tokenize=False)
     assert reconstructed_chat == full_chat
+
+
+def test_fail_chat_template():
+    convo = [
+        {
+            'role':
+                'system',  # this will fail because the tokenizer doesn't have a system role
+            'content': 'everyone thinks you are so cool',
+        },
+        {
+            'role': 'user',
+            'content': 'hiiii',
+        },
+        {
+            'role': 'assistant',
+            'content': 'yassss',
+        },
+    ]
+
+    example = {'messages': convo}
+
+    class DummyTokenizer:
+
+        def __init__(self) -> None:
+            self.chat_template = 'Hello, World!'
+
+        def apply_chat_template(self, **_):
+            raise ValueError('This tokenizer does not support the system role')
+
+    tok = DummyTokenizer()
+
+    with pytest.raises(ChatTemplateError):
+        _slice_chat_formatted_example(example, tok)
 
 
 def test_tokenize_no_labels_bos_pr():

@@ -8,6 +8,7 @@ Inspired by https://github.com/karpathy/minGPT/blob/master/mingpt/model.py
 
 from __future__ import annotations
 
+import copy
 import math
 import warnings
 from functools import cached_property
@@ -19,6 +20,7 @@ from typing import (
     MutableMapping,
     Optional,
     Tuple,
+    Type,
     Union,
 )
 import types
@@ -28,6 +30,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from composer.models import HuggingFaceModel
 from composer.utils import dist
+from tabulate import tabulate
 
 from llmfoundry.layers_registry import ffns_with_megablocks
 from llmfoundry.models.layers.attention import is_flash_v2_installed
@@ -39,19 +42,17 @@ if is_flash_v2_installed():
     except Exception as e:
         raise e
 
-from omegaconf import DictConfig
-from omegaconf import OmegaConf as om
+import logging
+
 from transformers import PreTrainedModel, PreTrainedTokenizerBase
 from transformers.modeling_outputs import (
     BaseModelOutputWithPast,
     CausalLMOutputWithPast,
 )
-from transformers.models.llama.modeling_llama import \
-    LlamaDynamicNTKScalingRotaryEmbedding as HFDynamicNTKScalingRotaryEmbedding
-from transformers.models.llama.modeling_llama import \
-    LlamaLinearScalingRotaryEmbedding as HFLinearScalingRotaryEmbedding
-from transformers.models.llama.modeling_llama import \
-    LlamaRotaryEmbedding as HFRotaryEmbedding
+from transformers.models.llama.modeling_llama import (
+    LlamaConfig,
+    LlamaRotaryEmbedding,
+)
 
 from llmfoundry.layers_registry import norms, param_init_fns
 from llmfoundry.models.layers.attention import (
@@ -63,42 +64,84 @@ from llmfoundry.models.layers.blocks import MPTBlock
 from llmfoundry.models.layers.custom_embedding import SharedEmbedding
 from llmfoundry.models.layers.layer_builders import build_norm
 from llmfoundry.models.mpt.configuration_mpt import MPTConfig
+from llmfoundry.models.utils.act_ckpt import (
+    build_act_ckpt_mod_to_blocks,
+    check_mapping_blocks_overlap,
+    pass_on_block_idx,
+)
 from llmfoundry.models.utils.config_moe_args import config_moe_args
 from llmfoundry.models.utils.mpt_param_count import (
     mpt_get_active_params,
     mpt_get_total_params,
 )
 
-# NOTE: All utils are imported directly even if unused so that
-# HuggingFace can detect all the needed files to copy into its modules folder.
-# Otherwise, certain modules are missing.
+# Import the fcs and param_init_fns here so that the recursive code creating the files for hf checkpoints can find them
+# These are the exceptions because fc.py and param_init_fns.py are not imported in any other place in the import tree
 # isort: off
-from llmfoundry.models.utils.meta_init_context import \
-    init_empty_weights  # type: ignore (see note)
-from llmfoundry.models.utils.param_init_fns import (
-    generic_param_init_fn_,  # type: ignore (see note)
-)
-from llmfoundry.models.layers.ffn import resolve_ffn_act_fn  # type: ignore (see note)
-
-from llmfoundry.models.utils.act_ckpt import (
-    pass_on_block_idx,
-    build_act_ckpt_mod_to_blocks,
-    check_mapping_blocks_overlap,
-)
-
-import logging
+from llmfoundry.models.layers.fc import fcs  #  type: ignore
+from llmfoundry.models.utils.param_init_fns import generic_param_init_fn_  # type: ignore
+from llmfoundry.models.layers.norm import LPLayerNorm  # type: ignore
+# isort: on
 
 log = logging.getLogger(__name__)
 
 
+class InvalidConfigAccessError(KeyError):
+    pass
+
+
+_ALLOWED_LLAMA_CONFIG_KEYS = {
+    # These are the only config keys that are set and are safe to read from
+    'rope_scaling',
+    'rope_theta',
+    'max_position_embeddings',
+    'hidden_size',
+    'num_attention_heads',
+
+    # Not set but llama modeling code tries to read this attribute
+    'partial_rotary_factor',
+
+    # Benign transformers attributes needed for __init__
+    '_get_generation_defaults',
+    'label2id',
+    'id2label',
+    'torch_dtype',
+    'problem_type',
+    '__class__',
+}
+
+
+class PartialLlamaConfig(LlamaConfig):
+    """Holds the rope config for Llama models and throws.
+
+    an `InvalidConfigAccessError` if any other config elements are read. This
+    class is necessary because the `LlamaRotaryEmbedding` class takes a full
+    `LlamaConfig` now instead of the old keyword arguments.
+    """
+
+    def __getattribute__(self, key: str):
+        if key not in _ALLOWED_LLAMA_CONFIG_KEYS:
+            raise InvalidConfigAccessError(key)
+
+        return super().__getattribute__(key)
+
+    def __getitem__(self, key: str):
+        if key not in _ALLOWED_LLAMA_CONFIG_KEYS:
+            raise InvalidConfigAccessError(key)
+
+        return super().__getitem__(key)
+
+
 def gen_rotary_embedding(
-    rope_head_dim: int,
     rope_impl: str,
     rope_theta: int,
     rope_dail_config: dict,
     rope_hf_config: dict,
     max_seq_len: int,
+    d_model: int,
+    n_heads: int,
 ):
+    rope_head_dim = d_model // n_heads
     if rope_impl == 'dail':
         return DAILRotaryEmbedding(
             dim=rope_head_dim,
@@ -110,34 +153,23 @@ def gen_rotary_embedding(
             pos_idx_in_fp32=rope_dail_config["pos_idx_in_fp32"],
             device="cpu",  # FSDP does not materialize modules with meta buffers, hence device is set to cpu
         )
-    elif rope_impl == "hf":
-        if rope_hf_config["type"] == "no_scaling":
-            return HFRotaryEmbedding(
-                rope_head_dim,
-                max_position_embeddings=max_seq_len,
-                base=rope_theta,
-                device=
-                'cpu',  # FSDP does not materialize modules with meta buffers, hence device is set to cpu
-            )
-        elif rope_hf_config["type"] == "linear":
-            return HFLinearScalingRotaryEmbedding(
-                rope_head_dim,
-                max_position_embeddings=max_seq_len,
-                base=rope_theta,
-                scaling_factor=rope_hf_config['factor'],
-                device=
-                'cpu',  # FSDP does not materialize modules with meta buffers, hence device is set to cpu
-            )
-        elif rope_hf_config["type"] == "dynamic":
-            return HFDynamicNTKScalingRotaryEmbedding(
-                rope_head_dim,
-                max_position_embeddings=max_seq_len,
-                base=rope_theta,
-                scaling_factor=rope_hf_config['factor'],
-                device=
-                'cpu',  # FSDP does not materialize modules with meta buffers, hence device is set to cpu
-            )
-    raise ValueError("rope_impl needs to be either dail or hf")
+    elif rope_impl == 'hf':
+        llama_rope_config = {**rope_hf_config}
+        llama_rope_config['rope_type'] = llama_rope_config.pop('type')
+        if llama_rope_config['rope_type'] == 'no_scaling':
+            llama_rope_config['rope_type'] = 'default'
+        partial_llama_config = PartialLlamaConfig(
+            rope_scaling=llama_rope_config,
+            rope_theta=rope_theta,
+            max_position_embeddings=max_seq_len,
+            hidden_size=d_model,
+            num_attention_heads=n_heads,
+        )
+        if rope_hf_config['type'] == 'no_scaling':
+            return LlamaRotaryEmbeddingFoundry(config=partial_llama_config)
+        elif rope_hf_config['type'] in {'llama3', 'linear', 'dynamic'}:
+            return LlamaRotaryEmbedding(config=partial_llama_config)
+    raise ValueError('rope_impl needs to be either dail or hf')
 
 
 def gen_attention_mask_in_length(
@@ -309,6 +341,20 @@ def apply_sequence_id(
     return attn_bias
 
 
+class LlamaRotaryEmbeddingFoundry(LlamaRotaryEmbedding):
+
+    @torch.no_grad()
+    def forward(
+        self,
+        x: torch.Tensor,
+        position_ids: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        # In this subclass, we move `inv_freq` to same device as position_ids. This operation should be a no-op during training.
+        # This is done to fix pipeline parallel generation using hf.generate. Please see this comment for details: https://github.com/mosaicml/llm-foundry/pull/1334#issue-2387337525
+        self.inv_freq = self.inv_freq.to(position_ids.device)
+        return super().forward(x=x, position_ids=position_ids)
+
+
 class MPTPreTrainedModel(PreTrainedModel):
     config_class = MPTConfig
     base_model_prefix = "model"
@@ -366,22 +412,9 @@ class MPTModel(MPTPreTrainedModel):
             )
         self.emb_drop = nn.Dropout(config.emb_pdrop)
         self.mb_args = None
-        block_args = config.to_dict()
-        if block_args['ffn_config']['ffn_type'] in ffns_with_megablocks:
-            block_args['ffn_config'] = config_moe_args(
-                block_args['ffn_config'],
-                config.d_model,
-                config.expansion_ratio,
-                config.n_layers,
-            )
-            self.mb_args = block_args['ffn_config'].get('args')
+        self.shift_labels = True
 
-        self.blocks = nn.ModuleList([
-            MPTBlock(
-                device=config.init_device,
-                **block_args,
-            ) for _ in range(config.n_layers)
-        ])
+        self.blocks = self.construct_blocks(config=config,)
 
         # Tag all modules in the transformer blocks with the corresponding block_idx and max_block_idx
         for i, block in enumerate(self.blocks):
@@ -392,6 +425,7 @@ class MPTModel(MPTPreTrainedModel):
         self.norm_f = build_norm(
             name=config.norm_type.lower(),
             normalized_shape=config.d_model,
+            eps=config.norm_eps,
             device=config.init_device,
         )
 
@@ -400,12 +434,13 @@ class MPTModel(MPTPreTrainedModel):
         if self.rope:
             self.rope_impl = config.attn_config["rope_impl"]
             self.rotary_embedding = gen_rotary_embedding(
-                rope_head_dim=config.d_model // config.n_heads,
                 rope_impl=self.rope_impl,
                 rope_theta=config.attn_config['rope_theta'],
                 rope_dail_config=config.attn_config['rope_dail_config'],
                 rope_hf_config=config.attn_config['rope_hf_config'],
                 max_seq_len=self.config.max_seq_len,
+                d_model=config.d_model,
+                n_heads=config.n_heads,
             )
 
         if config.init_device != "meta":
@@ -442,6 +477,207 @@ class MPTModel(MPTPreTrainedModel):
 
         log.debug(self)
         log.debug(f'Using {self.config.init_config["name"]} initialization.')
+
+    @property
+    def block_class(self) -> Type[MPTBlock]:
+        return MPTBlock
+
+    def construct_blocks(self, config: MPTConfig) -> nn.ModuleList:
+        """Construct the nn.ModuleList with the Transformer blocks.
+
+        Args:
+            config (MPTConfig): The configuration object.
+
+        Returns:
+            nn.ModuleList: The list of Transformer blocks.
+        """
+        block_args = self.extract_block_args(config.to_dict())
+        self.kv_cache_layers = set()
+        self.blocks_fuse_norm_attn_norm = block_args.get(
+            'fuse_norm_attn_norm',
+            False,
+        )
+
+        if config.block_overrides is not None:
+            block_args_list = self._get_override_block_args_list(
+                config,
+                block_args,
+            )
+        else:
+            block_args_list = [block_args for _ in range(config.n_layers)]
+
+        return nn.ModuleList([
+            self.block_class(
+                device=config.init_device,
+                **block_args_i,
+            ) for block_args_i in block_args_list
+        ])
+
+    def _get_override_block_args_list(
+        self,
+        config: MPTConfig,
+        block_args: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        if config.block_overrides is None:
+            raise ValueError(
+                'config.block_overrides should not be None when calling _get_override_block_args_list.',
+            )
+        repeat = config.block_overrides.get('repeat', 1)
+        model_modules_order_expanded = MPTModel._get_modules_order_expanded(
+            config.block_overrides['order'],
+        ) * repeat
+        if len(model_modules_order_expanded) != config.n_layers:
+            raise ValueError(
+                f'The specified block overrides do not match the number of layers: {len(model_modules_order_expanded)} vs {config.n_layers}.',
+            )
+
+        new_block_args_list = []
+        layer_description_list = []
+
+        reuse_kv_layer_idx_dict = {}
+        for b_idx in range(config.n_layers):
+            module_name = model_modules_order_expanded[b_idx]
+            override_config = {}
+            if module_name != 'default':
+                override_config = copy.deepcopy(
+                    config.block_overrides['overrides'][module_name],
+                )
+                if 'reuse_kv_layer_idx' in override_config.get(
+                    'attn_config',
+                    {},
+                ):
+                    reuse_kv_layer_idx = MPTModel._resolve_reuse_kv_layer_idx(
+                        overrides_definition=config.
+                        block_overrides['overrides'],
+                        model_modules_order_expanded=
+                        model_modules_order_expanded,
+                        b_idx=b_idx,
+                        override_config=override_config,
+                        reuse_kv_layer_idx_dict=reuse_kv_layer_idx_dict,
+                    )
+                    override_config['attn_config']['reuse_kv_layer_idx'
+                                                  ] = reuse_kv_layer_idx
+                    self.kv_cache_layers.add(reuse_kv_layer_idx)
+            layer_description_list.append([
+                b_idx,
+                module_name,
+                override_config,
+            ],)
+            new_block_args_list.append(
+                MPTModel._override_block_args(
+                    block_args,
+                    override_config,
+                    config.allowed_block_overrides,
+                ),
+            )
+        log.info(
+            'The following is a summary of overrides per layer.\n' + tabulate(
+                layer_description_list,
+                headers=['idx', 'name', 'overrides'],
+            ),
+        )
+        return new_block_args_list
+
+    @staticmethod
+    def _resolve_reuse_kv_layer_idx(
+        overrides_definition: Dict[str, Any],
+        model_modules_order_expanded: List[str],
+        b_idx: int,
+        override_config: Dict[str, Any],
+        reuse_kv_layer_idx_dict: Dict[int, int],
+    ) -> int:
+        override_attn_config = override_config['attn_config']
+        if override_attn_config['reuse_kv_layer_idx'] >= 0:
+            raise ValueError(
+                f'The relative index of kv layer to reuse, {override_attn_config["reuse_kv_layer_idx"]=}, should be negative.',
+            )
+        reuse_kv_layer_idx = b_idx + override_attn_config['reuse_kv_layer_idx']
+        if reuse_kv_layer_idx < 0:
+            raise ValueError(
+                f'The absolute index of kv layer to reuse, {reuse_kv_layer_idx} should be non-negative.',
+            )
+        if reuse_kv_layer_idx in reuse_kv_layer_idx_dict:
+            reuse_kv_layer_idx = reuse_kv_layer_idx_dict[reuse_kv_layer_idx]
+        reuse_kv_layer_idx_dict[b_idx] = reuse_kv_layer_idx
+
+        parent_layer_name = model_modules_order_expanded[reuse_kv_layer_idx]
+        parent_config = {} if parent_layer_name == 'default' else copy.deepcopy(
+            overrides_definition[parent_layer_name],
+        )
+        if 'attn_config' not in parent_config:
+            parent_config['attn_config'] = {}
+        parent_config['attn_config']['reuse_kv_layer_idx'] = override_config[
+            'attn_config']['reuse_kv_layer_idx']
+
+        if override_config != parent_config and not (
+            'allow_mismatch' in override_config and
+            override_config['allow_mismatch']
+        ):
+            raise ValueError(
+                'For reusing the kv cache of a previous layer, the previous layer should match the block config as the current layer.',
+            )
+
+        return reuse_kv_layer_idx
+
+    @staticmethod
+    def _get_modules_order_expanded(order: List[Dict[str, Any]]) -> List[str]:
+        model_modules_order_expanded = []
+        for item in order:
+            repeat = item['repeat'] if 'repeat' in item else 1
+            if ('name' in item) == ('order' in item):
+                raise ValueError(
+                    'Exactly one of `order` or `name` must be specified for each block override.',
+                )
+
+            if 'name' in item:
+                model_modules_order_expanded.extend([item['name']] * repeat)
+            else:
+                model_modules_order_expanded.extend(
+                    MPTModel._get_modules_order_expanded(item['order']) *
+                    repeat,
+                )
+
+        return model_modules_order_expanded
+
+    @staticmethod
+    def _override_block_args(
+        block_args: Dict[str, Any],
+        override_config: Dict[str, Any],
+        allowed_block_overrides: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        unpermitted_keys = override_config.keys(
+        ) - allowed_block_overrides.keys()
+        if len(unpermitted_keys):
+            raise KeyError(f'Overriding {unpermitted_keys} is not supported.')
+
+        new_block_args = override_config | block_args
+        common_keys = override_config.keys() & block_args.keys()
+        for k in common_keys:
+            if type(override_config[k]) != type(block_args[k]):
+                raise ValueError(
+                    f'Override config should have same value types as the original config. Found override_config[{k}]={override_config[k]} vs block_args[{k}]={block_args[k]}.',
+                )
+            if isinstance(override_config[k], dict):
+                new_block_args[k] = MPTModel._override_block_args(
+                    block_args[k],
+                    override_config[k],
+                    allowed_block_overrides[k],
+                )
+            else:
+                new_block_args[k] = override_config[k]
+        return new_block_args
+
+    def extract_block_args(self, block_args: Dict[str, Any]) -> Dict[str, Any]:
+        """Sets the block args."""
+        if block_args['ffn_config']['ffn_type'] in ffns_with_megablocks:
+            block_args['ffn_config'] = config_moe_args(
+                block_args['ffn_config'],
+                block_args['d_model'],
+                block_args['expansion_ratio'],
+                block_args['n_layers'],
+            )
+            self.mb_args = block_args['ffn_config'].get('args')
+        return block_args
 
     def get_input_embeddings(self) -> Union[SharedEmbedding, nn.Embedding]:
         return self.wte
@@ -581,8 +817,9 @@ class MPTModel(MPTPreTrainedModel):
                     'sequence_id is a required argument when MPT is configured with attn_uses_sequence_id=True '
                     + 'and the model is in train mode.',
                 )
-            elif (self.attn_uses_sequence_id is
-                  False) and (sequence_id is not None):
+            elif (
+                self.attn_uses_sequence_id is False and sequence_id is not None
+            ):
                 warnings.warn(
                     'MPT received non-None input for `sequence_id` but is configured with attn_uses_sequence_id=False. '
                     +
@@ -595,16 +832,16 @@ class MPTModel(MPTPreTrainedModel):
             )
         elif input_ids is not None:
             bsz = input_ids.size(0)
-            S = input_ids.size(1)
             x = self.wte(input_ids)
             input_device = input_ids.device
         elif inputs_embeds is not None:
             bsz = inputs_embeds.size(0)
-            S = inputs_embeds.size(1)
             x = inputs_embeds
             input_device = inputs_embeds.device
         else:
             raise ValueError("You must specify input_ids or inputs_embeds")
+
+        S = self.get_sequence_length(x)
 
         assert (
             S <= self.config.max_seq_len
@@ -704,8 +941,11 @@ class MPTModel(MPTPreTrainedModel):
 
         # initialize the past key values cache if it should be used
         presents = () if use_cache else None
-        if use_cache and past_key_values is None:
-            past_key_values = [() for _ in range(self.config.n_layers)]  # type: ignore
+        if (
+            use_cache or len(self.kv_cache_layers) > 0
+        ) and past_key_values is None:
+            past_key_values = [() for _ in range(self.config.n_layers)
+                              ]  # type: ignore
 
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
@@ -720,13 +960,27 @@ class MPTModel(MPTPreTrainedModel):
                 attention_mask,
             )
 
+        layer_kv_cache_dict = {}
         for b_idx, block in enumerate(self.blocks):
+            attn_block = block.norm_attn_norm.attn if self.blocks_fuse_norm_attn_norm else block.attn
+            if attn_block.reuse_kv_layer_idx is not None:
+                if attn_block.reuse_kv_layer_idx not in layer_kv_cache_dict:
+                    raise KeyError(
+                        f'kv cache for layer {block.reuse_kv_layer_idx} not found in {layer_kv_cache_dict=}.',
+                    )
+                prev_layer_key_value = layer_kv_cache_dict[
+                    attn_block.reuse_kv_layer_idx]
+            else:
+                prev_layer_key_value = None
             if output_hidden_states:
                 assert all_hidden_states is not None  # pyright
                 all_hidden_states = all_hidden_states + (x,)
             past_key_value = (
                 past_key_values[b_idx] if past_key_values is not None else None
             )
+            extra_kwargs = {}
+            if prev_layer_key_value is not None:
+                extra_kwargs['prev_layer_key_value'] = prev_layer_key_value
             x, attn_weights, present = block(
                 x,
                 past_key_value=past_key_value,
@@ -737,9 +991,15 @@ class MPTModel(MPTPreTrainedModel):
                 output_attentions=bool(output_attentions),
                 alibi_slopes=alibi_slopes,
                 flash_attn_padding_info=flash_attn_padding_info,
+                **extra_kwargs,
             )
             if presents is not None:
                 presents += (present,)
+            if b_idx in self.kv_cache_layers:
+                layer_kv_cache_dict[b_idx] = [
+                    present[0][:, past_position:],
+                    present[1][:, past_position:],
+                ]
 
             if output_attentions:
                 assert all_self_attns is not None  # pyright
@@ -758,6 +1018,17 @@ class MPTModel(MPTPreTrainedModel):
             hidden_states=all_hidden_states,
             attentions=all_self_attns,
         )
+
+    def get_sequence_length(self, x: torch.Tensor) -> int:
+        """Returns the sequence length.
+
+        Args:
+            x (torch.Tensor): The input Tensor.
+
+        Returns:
+            S (int): The sequence length.
+        """
+        return x.size(1)
 
     # Param Initialization, needed for device='meta' fast initialization
     def param_init_fn(self, module: nn.Module) -> None:
@@ -783,7 +1054,7 @@ class MPTForCausalLM(MPTPreTrainedModel):
         super().__init__(config)
         log.info(f"Instantiating an MPTForCausalLM model from {__file__}")
 
-        self.transformer: MPTModel = MPTModel(config)
+        self.transformer: MPTModel = self.backbone_model_class(config)
 
         self.lm_head = None
         if not config.tie_word_embeddings:
@@ -814,6 +1085,10 @@ class MPTForCausalLM(MPTPreTrainedModel):
                         f"{logit_scale=} is not recognized as an option; use numeric value or 'inv_sqrt_d_model'.",
                     )
             self.logit_scale = logit_scale
+
+    @property
+    def backbone_model_class(self) -> Type[MPTModel]:
+        return MPTModel
 
     def get_input_embeddings(self) -> Union[SharedEmbedding, nn.Embedding]:
         return self.transformer.get_input_embeddings()
@@ -1059,11 +1334,48 @@ class MPTForCausalLM(MPTPreTrainedModel):
         return reordered_past
 
 
+def get_targets(labels: torch.Tensor) -> torch.Tensor:
+    targets = torch.roll(labels, shifts=-1)
+    targets[:, -1] = -100
+    return targets
+
+
+def compute_loss_from_logits(
+    outputs: CausalLMOutputWithPast,
+    shift_labels: bool,
+    labels: torch.Tensor,
+    loss_fn: nn.Module,
+    sample_weighing_factor: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    targets = get_targets(labels) if shift_labels else labels
+
+    losses = loss_fn(
+        outputs.logits.view(-1, outputs.logits.size(-1)),
+        targets.view(-1),
+    )
+
+    if torch.all(targets == loss_fn.ignore_index):
+        loss = losses.sum()
+    else:
+        loss = losses.sum() / (targets != loss_fn.ignore_index).sum()
+        if sample_weighing_factor is not None:
+            if sample_weighing_factor.shape[0] > 1:
+                raise ValueError(
+                    'Sample weighing factor is not supported when batch["sample_weighing_factor"].shape[0] > 1.',
+                )
+            loss = loss * sample_weighing_factor[0].item()
+
+    return loss
+
+
 class ComposerMPTCausalLM(HuggingFaceModel):
     def __init__(
         self,
-        om_model_config: DictConfig,
         tokenizer: Optional[PreTrainedTokenizerBase] = None,
+        use_train_metrics: Optional[bool] = True,
+        additional_train_metrics: Optional[List] = None,
+        loss_fn: Optional[Union[str, Dict]] = 'fused_crossentropy',
+        **kwargs: Dict[str, Any],
     ):
         from llmfoundry.metrics import (
             DEFAULT_CAUSAL_LM_EVAL_METRICS,
@@ -1071,27 +1383,16 @@ class ComposerMPTCausalLM(HuggingFaceModel):
         )
         from llmfoundry.utils.builders import build_metric
 
-        resolved_om_model_config = om.to_container(
-            om_model_config,
-            resolve=True,
-        )
-        assert isinstance(resolved_om_model_config, dict)
+        additional_train_metrics = additional_train_metrics or []
 
-        hf_config = MPTConfig.from_dict(resolved_om_model_config)
-        model = MPTForCausalLM(hf_config)
+        model = self.model_class(self.config_class(**kwargs))
 
-        use_train_metrics = om_model_config.get('use_train_metrics', True)
-        train_metric_names = DEFAULT_CAUSAL_LM_TRAIN_METRICS + resolved_om_model_config.get(
-            'additional_train_metrics',
-            [],
-        )
+        use_train_metrics = use_train_metrics
+        train_metric_names = DEFAULT_CAUSAL_LM_TRAIN_METRICS + additional_train_metrics
         train_metrics = [
             build_metric(metric, {}) for metric in train_metric_names
         ] if use_train_metrics else []
-        eval_metric_names = DEFAULT_CAUSAL_LM_EVAL_METRICS + resolved_om_model_config.get(
-            'additional_eval_metrics',
-            [],
-        )
+        eval_metric_names = DEFAULT_CAUSAL_LM_EVAL_METRICS + additional_train_metrics
         eval_metrics = [
             build_metric(metric, {}) for metric in eval_metric_names
         ]
@@ -1102,11 +1403,11 @@ class ComposerMPTCausalLM(HuggingFaceModel):
             use_logits=True,
             metrics=train_metrics,
             eval_metrics=eval_metrics,
-            shift_labels=True,
+            shift_labels=model.transformer.shift_labels,
             allow_embedding_resizing=True,
         )
 
-        loss_fn_config = om_model_config.get('loss_fn', 'fused_crossentropy')
+        loss_fn_config = loss_fn
         if loss_fn_config == 'fused_crossentropy':
             try:
                 from flash_attn.losses.cross_entropy import (
@@ -1135,10 +1436,16 @@ class ComposerMPTCausalLM(HuggingFaceModel):
                 f'Specified loss_fn={self.loss_fn} not recognized. `loss_fn` must be one of [`fused_crossentropy`, `torch_crossentropy`].',
             )
 
+    @property
+    def model_class(self) -> Type[MPTForCausalLM]:
+        return MPTForCausalLM
+
+    @property
+    def config_class(self) -> Type[MPTConfig]:
+        return MPTConfig
+
     def get_targets(self, batch: Mapping) -> torch.Tensor:
-        targets = torch.roll(batch["labels"], shifts=-1)
-        targets[:, -1] = -100
-        return targets
+        return get_targets(batch['labels'])
 
     def forward(self, batch: MutableMapping) -> CausalLMOutputWithPast:
         if self.config.ffn_config['ffn_type'] in ffns_with_megablocks:
@@ -1159,16 +1466,13 @@ class ComposerMPTCausalLM(HuggingFaceModel):
 
     def loss(self, outputs: CausalLMOutputWithPast,
              batch: Mapping) -> Union[dict, torch.Tensor]:
-        targets = self.get_targets(batch)
-        losses = self.loss_fn(
-            outputs.logits.view(-1, outputs.logits.size(-1)),
-            targets.view(-1),
+        loss = compute_loss_from_logits(
+            outputs,
+            self.shift_labels,
+            batch['labels'],
+            self.loss_fn,
+            batch.get('sample_weighing_factor', None),
         )
-
-        if torch.all(targets == self.loss_fn.ignore_index):
-            loss = losses.sum()
-        else:
-            loss = losses.sum() / (targets != self.loss_fn.ignore_index).sum()
 
         if self.config.ffn_config['ffn_type'] in ffns_with_megablocks:
             # MegaBlocks MoE load balancing loss
@@ -1184,7 +1488,6 @@ class ComposerMPTCausalLM(HuggingFaceModel):
                 'loss': loss,
                 'lbl': lbl,
             }
-
         return loss
 
     @cached_property
@@ -1202,13 +1505,29 @@ class ComposerMPTCausalLM(HuggingFaceModel):
         # that the dataset has been constructed without padding. Additionally, we
         # assume the backward pass is approximately 2x the forward pass
 
-        bs, msl = batch["input_ids"].shape[0:2]
+        if self.model.config.block_overrides is not None:
+            warnings.warn(
+                'Warning, flop computation is not supported when using block overrides. Returning 0 flops per batch.',
+            )
+            return 0
+
+        bs, msl = batch['input_ids'].shape[0:2]
         params = self.n_active_params
         params_flops_per_token = 2 * params
         params_flops_per_seq = params_flops_per_token * msl
-        attn_flops_per_seq = (
+        attn_flops_per_seq = self.get_attention_flops(msl)
+        return (params_flops_per_seq + attn_flops_per_seq) * 3 * bs
+
+    def get_attention_flops(self, msl: int) -> int:
+        """Computes the attention flops for the batch.
+
+        Args:
+            msl (int): The batch sequence length.
+
+        Returns:
+            attn_flops (int): The attention flops.
+        """
+        return (
             self.model.config.n_layers * 2 * 2 *
             (self.model.config.d_model * (msl**2))
         )
-
-        return (params_flops_per_seq + attn_flops_per_seq) * 3 * bs

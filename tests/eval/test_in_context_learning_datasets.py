@@ -4,7 +4,6 @@
 import contextlib
 import os
 import random
-import types
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -13,7 +12,6 @@ import torch
 import transformers
 from composer import Evaluator
 from composer.core import DataSpec
-from composer.datasets.utils import MultiTokenEOSCriteria
 from composer.loggers import InMemoryLogger
 from composer.models import HuggingFaceModel
 from composer.trainer import Trainer
@@ -21,11 +19,11 @@ from composer.utils import dist, reproducibility
 from torch.utils.data import DataLoader
 
 from llmfoundry.eval.datasets import (
-    InContextLearningCodeEvalDataset,
     InContextLearningDataset,
     InContextLearningGenerationTaskWithAnswersDataset,
     InContextLearningMultipleChoiceTaskDataset,
     InContextLearningSchemaTaskDataset,
+    MultiTokenEOSCriteria,
     get_continuation_span,
     get_fewshot_sample_idxs,
     get_icl_task_dataloader,
@@ -35,11 +33,11 @@ from llmfoundry.eval.datasets import (
     trim_context,
 )
 from llmfoundry.eval.metrics import (
-    InContextLearningCodeEvalAccuracy,
     InContextLearningGenerationExactMatchAccuracy,
     InContextLearningLMAccuracy,
     InContextLearningMultipleChoiceAccuracy,
 )
+from llmfoundry.utils.builders import build_icl_evaluators
 
 
 def test_strip_data():
@@ -890,72 +888,6 @@ def test_qa_tokenize_example(
     ]
 
 
-def test_code_adjust_padding(
-    tiny_gpt2_tokenizer: transformers.AutoTokenizer,
-    tmp_path: Path,
-):
-    local_data = os.path.join(os.path.dirname(__file__), 'local_data')
-    dataset_uri = f'{local_data}/human_eval_small.jsonl'
-    tokenizer = tiny_gpt2_tokenizer
-    seqlen = 2048
-    num_fewshot = 0
-    prompt_string = ''
-    gen_kwargs = {'temperature': .9, 'top_p': .95, 'num_beams': 9000}
-
-    dl = InContextLearningCodeEvalDataset(
-        dataset_uri=dataset_uri,
-        tokenizer=tokenizer,
-        max_seq_len=seqlen,
-        pad_tok_id=tokenizer.eos_token_id,
-        num_fewshot=num_fewshot,
-        fewshot_random_seed=1,
-        prompt_string=prompt_string,
-        example_delimiter='\n',
-        prelimiter='Code start:',
-        continuation_delimiter='\nPlease code:',
-        destination_path=str(tmp_path / 'test_human_eval_small.jsonl'),
-        generation_kwargs=gen_kwargs,
-        generations_per_sample=10,
-    )
-
-    assert all(
-        len(data['prompt']) == 148 for data in dl.dataset
-    )  # pyright: ignore [reportGeneralTypeIssues]
-
-
-def test_code_update_gen_kwargs(
-    tiny_gpt2_tokenizer: transformers.AutoTokenizer,
-    tmp_path: Path,
-):
-    local_data = os.path.join(os.path.dirname(__file__), 'local_data')
-    dataset_uri = f'{local_data}/human_eval_small.jsonl'
-    tokenizer = tiny_gpt2_tokenizer
-    seqlen = 2048
-    num_fewshot = 0
-    prompt_string = ''
-    gen_kwargs = {'temperature': .9, 'top_p': .95, 'num_beams': 9000}
-
-    dl = InContextLearningCodeEvalDataset(
-        dataset_uri=dataset_uri,
-        tokenizer=tokenizer,
-        max_seq_len=seqlen,
-        pad_tok_id=tokenizer.eos_token_id,
-        num_fewshot=num_fewshot,
-        fewshot_random_seed=1,
-        prompt_string=prompt_string,
-        example_delimiter='\n',
-        prelimiter='Code start:',
-        continuation_delimiter='\nPlease code:',
-        destination_path=str(tmp_path / 'test_human_eval_small.jsonl'),
-        generation_kwargs=gen_kwargs,
-        generations_per_sample=10,
-    )
-    assert dl.base_batch['generation_kwargs']['num_beams'] == 9000
-    assert dl.base_batch['generation_kwargs']['top_p'] == .95
-    assert dl.base_batch['generation_kwargs']['temperature'] == .9
-    assert dl.base_batch['generation_kwargs']['do_sample'] == True
-
-
 def test_mc_tokenize_example(
     tiny_gpt2_tokenizer: transformers.AutoTokenizer,
     tmp_path: Path,
@@ -1159,15 +1091,22 @@ def test_mc_task_dataloader_subcategories(
         dataset_uri=dataset_uri,
         tokenizer=tokenizer,
         batch_size=batch_size,
-        max_seq_len=seqlen,
-        pad_tok_id=tokenizer.eos_token_id,
-        num_fewshot=2,
-        prompt_string=
-        'The following are multiple choice questions (with answers).\n',
-        example_delimiter='\n',
-        continuation_delimiter='Answer: ',
-        destination_path=str(tmp_path / 'icl.jsonl'),
         has_categories=True,
+        destination_path=str(tmp_path / 'icl.jsonl'),
+        kwargs={
+            'num_fewshot':
+                2,
+            'max_seq_len':
+                seqlen,
+            'pad_tok_id':
+                tokenizer.eos_token_id,
+            'prompt_string':
+                'The following are multiple choice questions (with answers).\n',
+            'example_delimiter':
+                '\n',
+            'continuation_delimiter':
+                'Answer: ',
+        },
     )
     assert isinstance(dls, dict)
 
@@ -1211,13 +1150,15 @@ def test_lm_task_dataloader_extra_space(
         dataset_uri=dataset_uri,
         tokenizer=tokenizer,
         batch_size=batch_size,
-        max_seq_len=seqlen,
-        pad_tok_id=tokenizer.eos_token_id,
-        num_fewshot=10,
-        prompt_string='',
-        example_delimiter='\n',
-        continuation_delimiter=' ',
         destination_path=str(tmp_path / 'icl.jsonl'),
+        kwargs={
+            'max_seq_len': seqlen,
+            'pad_tok_id': tokenizer.eos_token_id,
+            'num_fewshot': 10,
+            'prompt_string': '',
+            'example_delimiter': '\n',
+            'continuation_delimiter': ' ',
+        },
     )
     assert isinstance(dl, DataSpec)
     assert isinstance(dl.dataloader, DataLoader)  # pyright
@@ -1261,13 +1202,15 @@ def test_lm_task_dataloader(
         dataset_uri=dataset_uri,
         tokenizer=tokenizer,
         batch_size=batch_size,
-        max_seq_len=seqlen,
-        pad_tok_id=tokenizer.eos_token_id,
-        num_fewshot=0,
-        prompt_string='',
-        example_delimiter='\n',
-        continuation_delimiter='',
         destination_path=str(tmp_path / 'icl.jsonl'),
+        kwargs={
+            'max_seq_len': seqlen,
+            'pad_tok_id': tokenizer.eos_token_id,
+            'num_fewshot': 0,
+            'prompt_string': '',
+            'example_delimiter': '\n',
+            'continuation_delimiter': '',
+        },
     )
     assert isinstance(dl, DataSpec)
     assert isinstance(dl.dataloader, DataLoader)  # pyright
@@ -1310,14 +1253,16 @@ def test_schema_task_dataloader(
         dataset_uri=dataset_uri,
         tokenizer=tokenizer,
         batch_size=batch_size,
-        max_seq_len=seqlen,
-        pad_tok_id=tokenizer.eos_token_id,
-        num_fewshot=1,
-        prompt_string='',
-        example_delimiter='\n',
-        question_prelimiter=prelimiter,
-        continuation_delimiter='',
         destination_path=str(tmp_path / 'icl.jsonl'),
+        kwargs={
+            'max_seq_len': seqlen,
+            'pad_tok_id': tokenizer.eos_token_id,
+            'num_fewshot': 1,
+            'prompt_string': '',
+            'example_delimiter': '\n',
+            'prelimiter': prelimiter,
+            'continuation_delimiter': '',
+        },
     )
     assert isinstance(dl, DataSpec)
     assert isinstance(dl.dataloader, DataLoader)
@@ -1369,13 +1314,15 @@ def test_schema_task_dataloader_sentpiece_tokenizer(
         dataset_uri=dataset_uri,
         tokenizer=tokenizer,
         batch_size=batch_size,
-        max_seq_len=seqlen,
-        pad_tok_id=tokenizer.eos_token_id,
-        num_fewshot=1,
-        prompt_string='',
-        example_delimiter='\n',
-        continuation_delimiter=' ',
         destination_path=str(tmp_path / 'icl.jsonl'),
+        kwargs={
+            'max_seq_len': seqlen,
+            'pad_tok_id': tokenizer.eos_token_id,
+            'num_fewshot': 1,
+            'prompt_string': '',
+            'example_delimiter': '\n',
+            'continuation_delimiter': ' ',
+        },
     )
     assert isinstance(dl, DataSpec)
     assert isinstance(dl.dataloader, DataLoader)
@@ -1427,13 +1374,15 @@ def test_lm_task_dataloader_opt_tokenizer(
         dataset_uri=dataset_uri,
         tokenizer=tokenizer,
         batch_size=batch_size,
-        max_seq_len=seqlen,
-        pad_tok_id=tokenizer.eos_token_id,
-        num_fewshot=num_fewshot,
-        prompt_string='',
-        example_delimiter='\n',
-        continuation_delimiter='',
         destination_path=str(tmp_path / 'icl.jsonl'),
+        kwargs={
+            'max_seq_len': seqlen,
+            'pad_tok_id': tokenizer.eos_token_id,
+            'num_fewshot': num_fewshot,
+            'prompt_string': '',
+            'example_delimiter': '\n',
+            'continuation_delimiter': '',
+        },
     )
     assert isinstance(dl, DataSpec)
     assert isinstance(dl.dataloader, DataLoader)  # pyright
@@ -1479,13 +1428,15 @@ def test_mc_task_dataloader_opt_tokenizer(
         dataset_uri=dataset_uri,
         tokenizer=tokenizer,
         batch_size=batch_size,
-        max_seq_len=seqlen,
-        pad_tok_id=tokenizer.eos_token_id,
-        num_fewshot=num_fewshot,
-        prompt_string='',
-        example_delimiter='\n',
-        continuation_delimiter=': ',
         destination_path=str(tmp_path / 'icl.jsonl'),
+        kwargs={
+            'max_seq_len': seqlen,
+            'pad_tok_id': tokenizer.eos_token_id,
+            'num_fewshot': num_fewshot,
+            'prompt_string': '',
+            'example_delimiter': '\n',
+            'continuation_delimiter': ': ',
+        },
     )
     assert isinstance(dl, DataSpec)
     assert isinstance(dl.dataloader, DataLoader)  # pyright
@@ -1542,13 +1493,15 @@ def test_mc_split_batch(
         dataset_uri=dataset_uri,
         tokenizer=tokenizer,
         batch_size=batch_size,
-        max_seq_len=seqlen,
-        pad_tok_id=tokenizer.eos_token_id,
-        num_fewshot=num_fewshot,
-        prompt_string='',
-        example_delimiter='\n',
-        continuation_delimiter=': ',
         destination_path=str(tmp_path / 'icl.jsonl'),
+        kwargs={
+            'max_seq_len': seqlen,
+            'pad_tok_id': tokenizer.eos_token_id,
+            'num_fewshot': num_fewshot,
+            'prompt_string': '',
+            'example_delimiter': '\n',
+            'continuation_delimiter': ': ',
+        },
     )
     assert isinstance(dl, DataSpec)
     assert isinstance(dl.dataloader, DataLoader)  # pyright
@@ -1619,13 +1572,15 @@ def test_qa_split_batch(
         dataset_uri=dataset_uri,
         tokenizer=tokenizer,
         batch_size=8,
-        max_seq_len=1024,
-        pad_tok_id=tokenizer.eos_token_id,
-        num_fewshot=0,
-        prompt_string='',
-        example_delimiter='\n',
-        continuation_delimiter=': ',
         destination_path=str(Path(gathered_paths[0]) / 'icl.jsonl'),
+        kwargs={
+            'max_seq_len': 1024,
+            'pad_tok_id': tokenizer.eos_token_id,
+            'num_fewshot': 0,
+            'prompt_string': '',
+            'example_delimiter': '\n',
+            'continuation_delimiter': ': ',
+        },
     )
 
     assert isinstance(dl, DataSpec)  # pyright
@@ -1681,14 +1636,16 @@ def test_qa_task_dataloader_w_null_eos(
             dataset_uri,
             tokenizer,
             batch_size,
-            max_seq_len=seqlen,
-            pad_tok_id=tokenizer.eos_token_id,
-            num_fewshot=num_fewshot,
-            prompt_string=prompt_string,
-            example_delimiter='\n',
-            question_prelimiter='Q: ',
-            continuation_delimiter='\nA:',
             destination_path=str(tmp_path / f'icl_{num_fewshot}.jsonl'),
+            kwargs={
+                'max_seq_len': seqlen,
+                'pad_tok_id': tokenizer.eos_token_id,
+                'num_fewshot': num_fewshot,
+                'prompt_string': prompt_string,
+                'example_delimiter': '\n',
+                'prelimiter': 'Q: ',
+                'continuation_delimiter': '\nA:',
+            },
         )
 
 
@@ -1716,14 +1673,16 @@ def test_qa_task_dataloader(
         dataset_uri=dataset_uri,
         tokenizer=tokenizer,
         batch_size=batch_size,
-        max_seq_len=seqlen,
-        pad_tok_id=tokenizer.eos_token_id,
-        num_fewshot=num_fewshot,
-        prompt_string=prompt_string,
-        example_delimiter='\n',
-        question_prelimiter='Q: ',
-        continuation_delimiter='\nA:',
         destination_path=str(tmp_path / f'icl_{num_fewshot}.jsonl'),
+        kwargs={
+            'max_seq_len': seqlen,
+            'pad_tok_id': tokenizer.eos_token_id,
+            'num_fewshot': num_fewshot,
+            'prompt_string': prompt_string,
+            'example_delimiter': '\n',
+            'prelimiter': 'Q: ',
+            'continuation_delimiter': '\nA:',
+        },
     )
     assert isinstance(dl, DataSpec)
 
@@ -1783,15 +1742,17 @@ def test_qa_task_with_cot_dataloader(
         dataset_uri=dataset_uri,
         tokenizer=tokenizer,
         batch_size=batch_size,
-        max_seq_len=seqlen,
-        pad_tok_id=tokenizer.eos_token_id,
-        num_fewshot=num_fewshot,
-        prompt_string='',
-        example_delimiter='\n',
-        question_prelimiter='Q: ',
-        continuation_delimiter="\nA: Let's think step by step. ",
-        cot_delimiter=' #### ',
         destination_path=str(tmp_path / f'icl_{num_fewshot}.jsonl'),
+        kwargs={
+            'max_seq_len': seqlen,
+            'pad_tok_id': tokenizer.eos_token_id,
+            'num_fewshot': num_fewshot,
+            'prompt_string': '',
+            'example_delimiter': '\n',
+            'prelimiter': 'Q: ',
+            'continuation_delimiter': "\nA: Let's think step by step. ",
+            'cot_delimiter': ' #### ',
+        },
     )
     assert isinstance(dl, DataSpec)
     assert isinstance(dl.dataloader, DataLoader)  # pyright
@@ -1848,14 +1809,16 @@ def test_mc_task_dataloader(
         dataset_uri=dataset_uri,
         tokenizer=tokenizer,
         batch_size=batch_size,
-        max_seq_len=seqlen,
-        pad_tok_id=tokenizer.eos_token_id,
-        num_fewshot=1,
-        prompt_string='',
-        question_prelimiter=prelimiter,
-        example_delimiter=example_delimiter,
-        continuation_delimiter='\nA: ',
         destination_path=str(tmp_path / 'icl.jsonl'),
+        kwargs={
+            'max_seq_len': seqlen,
+            'pad_tok_id': tokenizer.eos_token_id,
+            'num_fewshot': 1,
+            'prompt_string': '',
+            'prelimiter': prelimiter,
+            'example_delimiter': example_delimiter,
+            'continuation_delimiter': '\nA: ',
+        },
     )
     assert isinstance(dl, DataSpec)
     assert isinstance(dl.dataloader, DataLoader)  # pyright
@@ -1897,404 +1860,6 @@ def test_mc_task_dataloader(
     ) == ' Pour it onto a plate'
 
 
-@pytest.mark.parametrize('dataset_uri', ['human_eval_small.jsonl'])
-def test_code_eval_split_batch(dataset_uri: str, tmp_path: Path):
-    local_data = os.path.join(os.path.dirname(__file__), 'local_data')
-    dataset_uri = f'{local_data}/{dataset_uri}'
-
-    tokenizer = transformers.AutoTokenizer.from_pretrained(
-        'EleutherAI/gpt-neox-20b',
-    )  # type: ignore reportUnboundVariable
-
-    tmp_path_to_broadcast = str(os.path.abspath(tmp_path))
-    gathered_paths = dist.all_gather_object(tmp_path_to_broadcast)
-    dl = get_icl_task_dataloader(
-        'code_evaluation',
-        dataset_uri=dataset_uri,
-        tokenizer=tokenizer,
-        batch_size=5,
-        max_seq_len=1024,
-        pad_tok_id=tokenizer.eos_token_id,
-        num_fewshot=2,
-        prompt_string='',
-        example_delimiter='\n',
-        continuation_delimiter='',
-        destination_path=str(Path(gathered_paths[0]) / 'icl.jsonl'),
-        generations_per_sample=3,
-    )
-
-    assert isinstance(dl, DataSpec)  # pyright
-    batches = list(dl.dataloader)
-
-    for k in ('input_ids', 'attention_mask'):
-        assert [b[k].shape[0] for b in batches] == [5, 5, 2]
-
-    list_keys = {
-        'labels': str,
-        'prompts': str,
-        'tests': str,
-        'entry_points': str,
-        'test_inputs': list,
-        'test_outputs': list,
-        'languages': str,
-    }
-
-    for batch, size in zip(batches, [5, 5, 2]):
-        for field, type_ in list_keys.items():
-            assert len(batch[field]) == size
-            assert all(isinstance(val, type_) for val in batch[field])
-
-    static_keys = {'pass_at_k': (int, list), 'generation_kwargs': dict}
-    for batch in batches:
-        assert 'generation_kwargs' in batch
-        assert 'max_new_tokens' in batch['generation_kwargs']
-        assert isinstance(batch['generation_kwargs']['max_new_tokens'], int)
-        for field, type_ in static_keys.items():
-            assert isinstance(batch[field], type_)
-
-
-@pytest.mark.parametrize('dataset_uri', ['human_eval_small.jsonl'])
-@pytest.mark.parametrize('num_fewshot', [0, 2])
-@pytest.mark.parametrize('prompt_string', ['Please code:\n', ''])
-@pytest.mark.parametrize('generations_per_sample', [1, 3])
-def test_code_eval_sentpiece_dataloader(
-    dataset_uri: str,
-    tmp_path: Path,
-    num_fewshot: int,
-    prompt_string: str,
-    generations_per_sample: int,
-    tiny_llama_tokenizer: transformers.AutoTokenizer,
-):
-
-    local_data = os.path.join(os.path.dirname(__file__), 'local_data')
-
-    tokenizer = tiny_llama_tokenizer
-    dataset_uri = f'{local_data}/{dataset_uri}'
-    batch_size = 5
-    seqlen = 2048
-
-    dl = get_icl_task_dataloader(
-        'code_evaluation',
-        dataset_uri=dataset_uri,
-        tokenizer=tokenizer,
-        batch_size=batch_size,
-        max_seq_len=seqlen,
-        pad_tok_id=tokenizer.eos_token_id,
-        num_fewshot=num_fewshot,
-        prompt_string=prompt_string,
-        example_delimiter='\n',
-        continuation_delimiter='',
-        question_prelimiter='Code start: \n',
-        destination_path=str(tmp_path / f'icl_{num_fewshot}.jsonl'),
-        generations_per_sample=generations_per_sample,
-    )
-    assert isinstance(dl, DataSpec)
-
-    assert isinstance(dl.dataloader, DataLoader)  # pyright
-    batches = list(dl.dataloader)
-    dataset_size = len(open(dataset_uri, 'r').read().strip().split('\n'))
-    dataset_size *= generations_per_sample
-
-    max_prompt_length = 0
-
-    has_left_padding = []
-    for i, batch in enumerate(batches):
-        if isinstance(dl.dataloader.dataset, InContextLearningCodeEvalDataset):
-            max_prompt_length = dl.dataloader.dataset.max_prompt_length
-        N = len(batches)
-        bs = batch_size if i < N - 1 else dataset_size - (N - 1) * batch_size
-        assert tuple(batch['input_ids'].shape) == (bs, max_prompt_length)
-        assert tuple(batch['attention_mask'].shape) == (bs, max_prompt_length)
-        assert batch['mode'] == 'generate'
-        # the maximum generation length from the small test data
-        assert batch['generation_kwargs']['max_new_tokens'] == 129
-        has_left_padding.extend([
-            item[0] == tokenizer.eos_token_id for item in batch['input_ids']
-        ])
-    assert not all(has_left_padding)  # longest should be pushed left
-
-    decoded_batches = [
-        tokenizer.batch_decode(batch['input_ids']) for batch in batches
-    ]
-    for decoded_batch in decoded_batches:
-        assert all(
-            item.count('Code start: \n') == num_fewshot + 1
-            for item in decoded_batch
-        )
-
-        if len(prompt_string) > 0:
-            assert all(
-                item.count('Please code:\n') == 1 for item in decoded_batch
-            )
-
-    labels = [
-        '    for idx, elem in enumerate(numbers):\n        for idx2, elem2 in enumerate(numbers):\n            if idx != idx2:\n                distance = abs(elem - elem2)\n                if distance < threshold:\n                    return True\n\n    return False\n',
-        "    result = []\n    current_string = []\n    current_depth = 0\n\n    for c in paren_string:\n        if c == '(':\n            current_depth += 1\n            current_string.append(c)\n        elif c == ')':\n            current_depth -= 1\n            current_string.append(c)\n\n            if current_depth == 0:\n                result.append(''.join(current_string))\n                current_string.clear()\n\n    return result\n",
-        '    return number % 1.0\n',
-        '    balance = 0\n\n    for op in operations:\n        balance += op\n        if balance < 0:\n            return True\n\n    return False\n',
-    ]
-
-    # assert decoded_batch[0].endswith(
-    samples = [
-        "Code start: \nfrom typing import List\n\n\ndef has_close_elements(numbers: List[float], threshold: float) -> bool:\n    \"\"\" Check if in given list of numbers, are any two numbers closer to each other than\n    given threshold.\n    >>> has_close_elements([1.0, 2.0, 3.0], 0.5)\n    False\n    >>> has_close_elements([1.0, 2.8, 3.0, 4.0, 5.0, 2.0], 0.3)\n    True\n    \"\"\"\n",
-        "Code start: \nfrom typing import List\n\n\ndef separate_paren_groups(paren_string: str) -> List[str]:\n    \"\"\" Input to this function is a string containing multiple groups of nested parentheses. Your goal is to\n    separate those group into separate strings and return the list of those.\n    Separate groups are balanced (each open brace is properly closed) and not nested within each other\n    Ignore any spaces in the input string.\n    >>> separate_paren_groups('( ) (( )) (( )( ))')\n    ['()', '(())', '(()())']\n    \"\"\"\n",
-        "Code start: \n\n\ndef truncate_number(number: float) -> float:\n    \"\"\" Given a positive floating point number, it can be decomposed into\n    and integer part (largest integer smaller than given number) and decimals\n    (leftover part always smaller than 1).\n\n    Return the decimal part of the number.\n    >>> truncate_number(3.5)\n    0.5\n    \"\"\"\n",
-        "Code start: \nfrom typing import List\n\n\ndef below_zero(operations: List[int]) -> bool:\n    \"\"\" You're given a list of deposit and withdrawal operations on a bank account that starts with\n    zero balance. Your task is to detect if at any point the balance of account fallls below zero, and\n    at that point function should return True. Otherwise it should return False.\n    >>> below_zero([1, 2, 3])\n    False\n    >>> below_zero([1, 2, -4, 5])\n    True\n    \"\"\"\n",
-    ]
-    for i in range(4):
-        for j in range(generations_per_sample):
-            k = i * generations_per_sample + j
-            b, n = divmod(k, batch_size)
-            assert batches[b]['labels'][n] == labels[i]
-            assert decoded_batches[b][n].endswith(samples[i])
-
-
-@pytest.mark.parametrize('dataset_uri', ['human_eval_small.jsonl'])
-def test_code_eval_test_cases(dataset_uri: str, tmp_path: Path):
-    local_data = os.path.join(os.path.dirname(__file__), 'local_data')
-
-    tokenizer = transformers.AutoTokenizer.from_pretrained(
-        'huggyllama/llama-7b',
-    )  # type: ignore reportUnboundVariable
-    dataset_uri = f'{local_data}/{dataset_uri}'
-    batch_size = 4
-    seqlen = 512
-
-    dl = get_icl_task_dataloader(
-        'code_evaluation',
-        dataset_uri=dataset_uri,
-        tokenizer=tokenizer,
-        batch_size=batch_size,
-        max_seq_len=seqlen,
-        pad_tok_id=tokenizer.eos_token_id,
-        num_fewshot=0,
-        prompt_string='',
-        example_delimiter='\n',
-        continuation_delimiter='',
-        question_prelimiter='Code start: \n',
-        destination_path=str(tmp_path / f'icl_.jsonl'),
-        generations_per_sample=1,
-    )
-    assert isinstance(dl, DataSpec)
-
-    assert isinstance(dl.dataloader, DataLoader)  # pyright
-    batch = next(dl.dataloader._get_iterator())
-
-    max_prompt_length = 0
-    if isinstance(dl.dataloader.dataset, InContextLearningCodeEvalDataset):
-        max_prompt_length = dl.dataloader.dataset.max_prompt_length
-    assert tuple(batch['input_ids'].shape) == (batch_size, max_prompt_length)
-    assert tuple(
-        batch['attention_mask'].shape,
-    ) == (batch_size, max_prompt_length)
-    assert batch['mode'] == 'generate'
-    # the maximum generation length from the small test data
-    assert batch['generation_kwargs']['max_new_tokens'] == 129
-    assert any(
-        item[0] != tokenizer.eos_token_id for item in batch['input_ids']
-    )  # longest should be pushed left
-
-    mod = types.ModuleType('test_module')
-    for prompt, solution, inputs, outputs, entry_point in zip(
-        batch['prompts'],
-        batch['labels'],
-        batch['test_inputs'],
-        batch['test_outputs'],
-        batch['entry_points'],
-    ):
-        exec(prompt + solution, mod.__dict__)
-        for test_input, test_output in zip(inputs, outputs):
-            result = mod.__dict__[entry_point](*eval(test_input))
-            assert result == eval(test_output)
-
-
-@pytest.mark.parametrize('dataset_uri', ['human_eval_small.jsonl'])
-def test_code_eval_pass_at_k_validity(dataset_uri: str, tmp_path: Path):
-    local_data = os.path.join(os.path.dirname(__file__), 'local_data')
-
-    tokenizer = transformers.AutoTokenizer.from_pretrained(
-        'huggyllama/llama-7b',
-    )  # type: ignore reportUnboundVariable
-    dataset_uri = f'{local_data}/{dataset_uri}'
-    batch_size = 2
-    seqlen = 64
-
-    with pytest.raises(ValueError, match=r'.* pass_at_k .*'):
-        get_icl_task_dataloader(
-            'code_evaluation',
-            dataset_uri=dataset_uri,
-            tokenizer=tokenizer,
-            batch_size=batch_size,
-            max_seq_len=seqlen,
-            pad_tok_id=tokenizer.eos_token_id,
-            num_fewshot=0,
-            prompt_string='',
-            example_delimiter='\n',
-            continuation_delimiter='',
-            question_prelimiter='Code start: \n',
-            destination_path=str(tmp_path / f'icl_.jsonl'),
-            pass_at_k=10,
-            generations_per_sample=1,
-        )
-
-
-@pytest.mark.parametrize('dataset_uri', ['human_eval_small.jsonl'])
-@pytest.mark.parametrize('num_fewshot', [0, 2])
-@pytest.mark.parametrize('prompt_string', ['Please code:\n', ''])
-@pytest.mark.parametrize('generations_per_sample', [1, 3])
-def test_code_eval_task_dataloader(
-    dataset_uri: str,
-    tmp_path: Path,
-    num_fewshot: int,
-    prompt_string: str,
-    generations_per_sample: int,
-):
-
-    local_data = os.path.join(os.path.dirname(__file__), 'local_data')
-
-    tokenizer = transformers.AutoTokenizer.from_pretrained(
-        'mosaicml/mpt-7b',
-    )  # type: ignore reportUnboundVariable
-    dataset_uri = f'{local_data}/{dataset_uri}'
-    batch_size = 4
-    seqlen = 2048
-
-    dl = get_icl_task_dataloader(
-        'code_evaluation',
-        dataset_uri=dataset_uri,
-        tokenizer=tokenizer,
-        batch_size=batch_size,
-        max_seq_len=seqlen,
-        pad_tok_id=tokenizer.eos_token_id,
-        num_fewshot=num_fewshot,
-        prompt_string=prompt_string,
-        example_delimiter='\n',
-        continuation_delimiter='',
-        question_prelimiter='Code start: \n',
-        destination_path=str(tmp_path / f'icl_{num_fewshot}.jsonl'),
-        generations_per_sample=generations_per_sample,
-        generation_kwargs={
-            'temperature': .9,
-            'top_k': 40,
-        },
-    )
-    assert isinstance(dl, DataSpec)
-
-    assert isinstance(dl.dataloader, DataLoader)  # pyright
-    batches = list(dl.dataloader)
-    dataset_size = len(open(dataset_uri, 'r').read().strip().split('\n'))
-    dataset_size *= generations_per_sample
-
-    has_left_padding = []
-    for i, batch in enumerate(batches):
-        max_prompt_length = 0
-        if isinstance(dl.dataloader.dataset, InContextLearningCodeEvalDataset):
-            max_prompt_length = dl.dataloader.dataset.max_prompt_length
-        N = len(batches)
-        bs = batch_size if i < N - 1 else dataset_size - (N - 1) * batch_size
-        assert tuple(batch['input_ids'].shape) == (bs, max_prompt_length)
-        assert tuple(batch['attention_mask'].shape) == (bs, max_prompt_length)
-        assert batch['mode'] == 'generate'
-        # the maximum generation length from the small test data
-        assert batch['generation_kwargs']['max_new_tokens'] == 122
-        has_left_padding.extend([
-            item[0] == tokenizer.eos_token_id for item in batch['input_ids']
-        ])
-    assert not all(has_left_padding)  # longest should be pushed left
-
-    decoded_batches = [
-        tokenizer.batch_decode(batch['input_ids']) for batch in batches
-    ]
-    for decoded_batch in decoded_batches:
-        assert all(
-            item.count('Code start: \n') == num_fewshot + 1
-            for item in decoded_batch
-        )
-
-        if len(prompt_string) > 0:
-            assert all(
-                item.count('Please code:\n') == 1 for item in decoded_batch
-            )
-
-    labels = [
-        '    for idx, elem in enumerate(numbers):\n        for idx2, elem2 in enumerate(numbers):\n            if idx != idx2:\n                distance = abs(elem - elem2)\n                if distance < threshold:\n                    return True\n\n    return False\n',
-        "    result = []\n    current_string = []\n    current_depth = 0\n\n    for c in paren_string:\n        if c == '(':\n            current_depth += 1\n            current_string.append(c)\n        elif c == ')':\n            current_depth -= 1\n            current_string.append(c)\n\n            if current_depth == 0:\n                result.append(''.join(current_string))\n                current_string.clear()\n\n    return result\n",
-        '    return number % 1.0\n',
-        '    balance = 0\n\n    for op in operations:\n        balance += op\n        if balance < 0:\n            return True\n\n    return False\n',
-    ]
-
-    # assert decoded_batch[0].endswith(
-    samples = [
-        "Code start: \nfrom typing import List\n\n\ndef has_close_elements(numbers: List[float], threshold: float) -> bool:\n    \"\"\" Check if in given list of numbers, are any two numbers closer to each other than\n    given threshold.\n    >>> has_close_elements([1.0, 2.0, 3.0], 0.5)\n    False\n    >>> has_close_elements([1.0, 2.8, 3.0, 4.0, 5.0, 2.0], 0.3)\n    True\n    \"\"\"\n",
-        "Code start: \nfrom typing import List\n\n\ndef separate_paren_groups(paren_string: str) -> List[str]:\n    \"\"\" Input to this function is a string containing multiple groups of nested parentheses. Your goal is to\n    separate those group into separate strings and return the list of those.\n    Separate groups are balanced (each open brace is properly closed) and not nested within each other\n    Ignore any spaces in the input string.\n    >>> separate_paren_groups('( ) (( )) (( )( ))')\n    ['()', '(())', '(()())']\n    \"\"\"\n",
-        "Code start: \n\n\ndef truncate_number(number: float) -> float:\n    \"\"\" Given a positive floating point number, it can be decomposed into\n    and integer part (largest integer smaller than given number) and decimals\n    (leftover part always smaller than 1).\n\n    Return the decimal part of the number.\n    >>> truncate_number(3.5)\n    0.5\n    \"\"\"\n",
-        "Code start: \nfrom typing import List\n\n\ndef below_zero(operations: List[int]) -> bool:\n    \"\"\" You're given a list of deposit and withdrawal operations on a bank account that starts with\n    zero balance. Your task is to detect if at any point the balance of account fallls below zero, and\n    at that point function should return True. Otherwise it should return False.\n    >>> below_zero([1, 2, 3])\n    False\n    >>> below_zero([1, 2, -4, 5])\n    True\n    \"\"\"\n",
-    ]
-    for i in range(4):
-        for j in range(generations_per_sample):
-            k = i * generations_per_sample + j
-            b, n = divmod(k, batch_size)
-            assert batches[b]['labels'][n] == labels[i]
-            assert decoded_batches[b][n].endswith(samples[i])
-
-
-@pytest.mark.parametrize('dataset_uri', ['human_eval_small.jsonl'])
-@pytest.mark.parametrize('num_fewshot', [0, 1])
-def test_eval_split_batch(
-    mpt_tokenizer: transformers.AutoTokenizer,
-    dataset_uri: str,
-    num_fewshot: int,
-    tmp_path: Path,
-):
-
-    local_data = os.path.join(os.path.dirname(__file__), 'local_data')
-    tokenizer = mpt_tokenizer  # type: ignore reportUnboundVariable
-    dataset_uri = f'{local_data}/{dataset_uri}'
-    batch_size = 4
-    seqlen = 512
-
-    dl = get_icl_task_dataloader(
-        'code_evaluation',
-        dataset_uri=dataset_uri,
-        tokenizer=tokenizer,
-        batch_size=batch_size,
-        max_seq_len=seqlen,
-        pad_tok_id=tokenizer.eos_token_id,
-        num_fewshot=num_fewshot,
-        prompt_string='',
-        example_delimiter='\n',
-        continuation_delimiter='',
-        question_prelimiter='Code start: \n',
-        destination_path=str(tmp_path / f'icl_{num_fewshot}.jsonl'),
-        generations_per_sample=1,
-        generation_kwargs={
-            'temperature': .9,
-            'top_k': 40,
-        },
-    )
-    assert isinstance(dl, DataSpec)
-    assert isinstance(dl.dataloader, DataLoader)  # pyright
-    batch = next(dl.dataloader._get_iterator())
-    microbatch_size = 1
-    microbatches = dl.split_batch(batch, microbatch_size)
-    assert len(microbatches) == 4
-    for microbatch in microbatches:
-        assert dl.get_num_samples_in_batch(microbatch) == 1
-        assert 'input_ids' in microbatch
-        # TODO: what should this be?
-        # assert tuple(microbatch['input_ids'].shape) == (microbatch_size, seqlen)
-        assert 'attention_mask' in microbatch
-        # assert tuple(microbatch['attention_mask'].shape) == (microbatch_size, seqlen)
-        assert isinstance(microbatch['generation_kwargs'], dict)
-        assert microbatch['generation_kwargs']['temperature'] == .9
-        assert microbatch['generation_kwargs']['top_k'] == 40
-        assert microbatch['generation_kwargs']['pad_token_id'] == 0
-        assert microbatch['generation_kwargs']['num_beams'] == 1
-        assert microbatch['generation_kwargs']['do_sample'] == True
-        assert microbatch['generation_kwargs']['use_cache'] == True
-        assert microbatch['generation_kwargs']['eos_token_id'] == 0
-
-
 @pytest.mark.parametrize('num_fewshot', [0, 5])
 @pytest.mark.parametrize('dataset_uri', ['lambada_small.jsonl'])
 # @pytest.mark.gpu
@@ -2318,13 +1883,15 @@ def test_lm_task_evaluation(
         dataset_uri=dataset_uri,
         tokenizer=tokenizer,
         batch_size=batch_size,
-        max_seq_len=1024,
-        pad_tok_id=tokenizer.eos_token_id,
-        num_fewshot=num_fewshot,
-        prompt_string='',
-        example_delimiter='\n',
-        continuation_delimiter='',
         destination_path=str(tmp_path / 'icl.jsonl'),
+        kwargs={
+            'max_seq_len': 1024,
+            'pad_tok_id': tokenizer.eos_token_id,
+            'num_fewshot': num_fewshot,
+            'prompt_string': '',
+            'example_delimiter': '\n',
+            'continuation_delimiter': '',
+        },
     )
 
     evaluator = Evaluator(
@@ -2370,13 +1937,15 @@ def test_schema_task_evaluation(
         dataset_uri=dataset_uri,
         tokenizer=tokenizer,
         batch_size=batch_size,
-        max_seq_len=1024,
-        pad_tok_id=tokenizer.eos_token_id,
-        num_fewshot=num_fewshot,
-        prompt_string='',
-        example_delimiter='\n',
-        continuation_delimiter=': ',
         destination_path=str(tmp_path / 'icl.jsonl'),
+        kwargs={
+            'max_seq_len': 1024,
+            'pad_tok_id': tokenizer.eos_token_id,
+            'num_fewshot': num_fewshot,
+            'prompt_string': '',
+            'example_delimiter': '\n',
+            'continuation_delimiter': ': ',
+        },
     )
 
     evaluator = Evaluator(
@@ -2435,14 +2004,16 @@ def test_mc_task_evaluation_subcategories(
         dataset_uri=dataset_uri,
         tokenizer=tokenizer,
         batch_size=batch_size,
-        max_seq_len=max_seq_len,
-        pad_tok_id=tokenizer.eos_token_id,
-        num_fewshot=num_fewshot,
-        prompt_string='',
-        example_delimiter='\n',
-        continuation_delimiter=': ',
         destination_path=str(Path(gathered_paths[0]) / 'icl.jsonl'),
         has_categories=True,
+        kwargs={
+            'max_seq_len': max_seq_len,
+            'pad_tok_id': tokenizer.eos_token_id,
+            'num_fewshot': num_fewshot,
+            'prompt_string': '',
+            'example_delimiter': '\n',
+            'continuation_delimiter': ': ',
+        },
     )
 
     assert isinstance(dls, dict)
@@ -2506,13 +2077,15 @@ def test_mc_task_evaluation(
         dataset_uri=dataset_uri,
         tokenizer=tokenizer,
         batch_size=batch_size,
-        max_seq_len=64,
-        pad_tok_id=tokenizer.eos_token_id,
-        num_fewshot=num_fewshot,
-        prompt_string='',
-        example_delimiter='\n',
-        continuation_delimiter=': ',
         destination_path=str(Path(gathered_paths[0]) / 'icl.jsonl'),
+        kwargs={
+            'max_seq_len': 64,
+            'pad_tok_id': tokenizer.eos_token_id,
+            'num_fewshot': num_fewshot,
+            'prompt_string': '',
+            'example_delimiter': '\n',
+            'continuation_delimiter': ': ',
+        },
     )
 
     evaluator = Evaluator(
@@ -2574,13 +2147,15 @@ def test_qa_task_evaluation_opt_tokenizer(
         dataset_uri=dataset_uri,
         tokenizer=tokenizer,
         batch_size=batch_size,
-        max_seq_len=1024,
-        pad_tok_id=tokenizer.eos_token_id,
-        num_fewshot=num_fewshot,
-        prompt_string='',
-        example_delimiter='\n',
-        continuation_delimiter=': ',
         destination_path=str(Path(gathered_paths[0]) / 'icl.jsonl'),
+        kwargs={
+            'max_seq_len': 1024,
+            'pad_tok_id': tokenizer.eos_token_id,
+            'num_fewshot': num_fewshot,
+            'prompt_string': '',
+            'example_delimiter': '\n',
+            'continuation_delimiter': ': ',
+        },
     )
 
     evaluator = Evaluator(
@@ -2635,14 +2210,16 @@ def test_qa_task_evaluation_with_cot_opt_tokenizer(
         dataset_uri=dataset_uri,
         tokenizer=tokenizer,
         batch_size=batch_size,
-        max_seq_len=1024,
-        pad_tok_id=tokenizer.eos_token_id,
-        num_fewshot=num_fewshot,
-        prompt_string='',
-        example_delimiter='\n',
-        continuation_delimiter="A: Let's think step by step. ",
-        cot_delimiter=' #### ',
         destination_path=str(Path(gathered_paths[0]) / 'icl.jsonl'),
+        kwargs={
+            'max_seq_len': 1024,
+            'pad_tok_id': tokenizer.eos_token_id,
+            'num_fewshot': num_fewshot,
+            'prompt_string': '',
+            'example_delimiter': '\n',
+            'continuation_delimiter': "A: Let's think step by step. ",
+            'cot_delimiter': ' #### ',
+        },
     )
 
     evaluator = Evaluator(
@@ -2695,13 +2272,15 @@ def test_qa_task_evaluation(
         dataset_uri=dataset_uri,
         tokenizer=tokenizer,
         batch_size=batch_size,
-        max_seq_len=1024,
-        pad_tok_id=tokenizer.eos_token_id,
-        num_fewshot=num_fewshot,
-        prompt_string='',
-        example_delimiter='\n',
-        continuation_delimiter=': ',
         destination_path=str(Path(gathered_paths[0]) / 'icl.jsonl'),
+        kwargs={
+            'max_seq_len': 1024,
+            'pad_tok_id': tokenizer.eos_token_id,
+            'num_fewshot': num_fewshot,
+            'prompt_string': '',
+            'example_delimiter': '\n',
+            'continuation_delimiter': ': ',
+        },
     )
 
     evaluator = Evaluator(
@@ -2755,14 +2334,16 @@ def test_qa_task_with_cot_evaluation(
         dataset_uri=dataset_uri,
         tokenizer=tokenizer,
         batch_size=batch_size,
-        max_seq_len=1024,
-        pad_tok_id=tokenizer.eos_token_id,
-        num_fewshot=num_fewshot,
-        prompt_string='',
-        example_delimiter='\n',
-        continuation_delimiter="A: Let's think step by step",
-        cot_delimiter=' #### ',
         destination_path=str(Path(gathered_paths[0]) / 'icl.jsonl'),
+        kwargs={
+            'max_seq_len': 1024,
+            'pad_tok_id': tokenizer.eos_token_id,
+            'num_fewshot': num_fewshot,
+            'prompt_string': '',
+            'example_delimiter': '\n',
+            'continuation_delimiter': "A: Let's think step by step",
+            'cot_delimiter': ' #### ',
+        },
     )
 
     evaluator = Evaluator(
@@ -2788,219 +2369,6 @@ def test_qa_task_with_cot_evaluation(
             1].item() == 0
 
 
-def test_code_eval_requires_envvar(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.delenv('CODE_EVAL_DEVICE', raising=False)
-    with pytest.raises(
-        ValueError,
-        match='Attempting to use InContextLearningCodeEvalAccuracy but.*',
-    ):
-        InContextLearningCodeEvalAccuracy().get_client()
-
-
-def test_code_eval_requires_valid_envvar(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv('CODE_EVAL_DEVICE', 'bigchungus')
-    with pytest.raises(
-        ValueError,
-        match='Environment variable `CODE_EVAL_DEVICE` must be on.*',
-    ):
-        InContextLearningCodeEvalAccuracy().get_client()
-
-
-@pytest.mark.parametrize('dataset_uri', ['human_eval_small.jsonl'])
-@pytest.mark.parametrize('num_fewshot', [0])
-@pytest.mark.parametrize('generations_per_sample', range(1, 3))
-@pytest.mark.gpu
-@pytest.mark.world_size(2)
-@pytest.mark.filterwarnings(
-    r'ignore:.*The dataloader_len \(2\) is greater than the length.*:UserWarning',
-)
-def test_code_eval_microbatching(
-    monkeypatch: pytest.MonkeyPatch,
-    tiny_opt_tokenizer: transformers.AutoTokenizer,
-    tiny_opt_model: transformers.AutoModelForCausalLM,
-    num_fewshot: int,
-    dataset_uri: str,
-    tmp_path: Path,
-    generations_per_sample: int,
-):
-
-    monkeypatch.setenv('CODE_EVAL_DEVICE', 'LOCAL')
-    in_memory_logger = InMemoryLogger(
-    )  # track the logged metrics in the in_memory_logger
-    local_data = os.path.join(os.path.dirname(__file__), 'local_data')
-    dataset_uri = f'{local_data}/{dataset_uri}'
-    tokenizer = tiny_opt_tokenizer
-    batch_size = 4
-
-    tmp_path_to_broadcast = str(os.path.abspath(tmp_path))
-    gathered_paths = dist.all_gather_object(tmp_path_to_broadcast)
-    dl = get_icl_task_dataloader(
-        'code_evaluation',
-        dataset_uri=dataset_uri,
-        tokenizer=tokenizer,
-        batch_size=batch_size,
-        max_seq_len=150,
-        pad_tok_id=tokenizer.eos_token_id,
-        num_fewshot=num_fewshot,
-        prompt_string='',
-        example_delimiter='\n',
-        continuation_delimiter=': ',
-        destination_path=str(Path(gathered_paths[0]) / 'icl.jsonl'),
-        generations_per_sample=generations_per_sample,
-    )
-
-    evaluator = Evaluator(
-        label='humaneval',
-        dataloader=dl,
-        metric_names=['InContextLearningCodeEvalAccuracy'],
-        device_eval_microbatch_size=1,
-    )
-    model = HuggingFaceModel(
-        model=tiny_opt_model,
-        tokenizer=tokenizer,
-        eval_metrics=[InContextLearningCodeEvalAccuracy()],
-        use_logits=True,
-    )
-
-    trainer = Trainer(model=model, max_duration='1ba', loggers=in_memory_logger)
-    torch.use_deterministic_algorithms(False)
-    trainer.eval(eval_dataloader=evaluator)
-    torch.use_deterministic_algorithms(True)
-    assert 'metrics/humaneval/InContextLearningCodeEvalAccuracy' in in_memory_logger.data.keys(
-    )
-    assert in_memory_logger.data[
-        'metrics/humaneval/InContextLearningCodeEvalAccuracy'][0][1].item() == 0
-
-
-@pytest.mark.parametrize('dataset_uri', ['human_eval_small.jsonl'])
-@pytest.mark.parametrize('num_fewshot', [0])
-@pytest.mark.parametrize('generations_per_sample', range(1, 3))
-@pytest.mark.gpu
-@pytest.mark.world_size(2)
-@pytest.mark.filterwarnings(
-    r'ignore:.*The dataloader_len \(2\) is greater than the length.*:UserWarning',
-)
-def test_code_eval_sentpiece_evaluation(
-    monkeypatch: pytest.MonkeyPatch,
-    num_fewshot: int,
-    dataset_uri: str,
-    tiny_opt_tokenizer: transformers.AutoTokenizer,
-    tiny_opt_model: transformers.AutoModelForCausalLM,
-    tmp_path: Path,
-    generations_per_sample: int,
-):
-
-    monkeypatch.setenv('CODE_EVAL_DEVICE', 'LOCAL')
-    in_memory_logger = InMemoryLogger(
-    )  # track the logged metrics in the in_memory_logger
-    local_data = os.path.join(os.path.dirname(__file__), 'local_data')
-    dataset_uri = f'{local_data}/{dataset_uri}'
-    tokenizer = tiny_opt_tokenizer
-    batch_size = 2
-    tmp_path_to_broadcast = str(os.path.abspath(tmp_path))
-    gathered_paths = dist.all_gather_object(tmp_path_to_broadcast)
-    dl = get_icl_task_dataloader(
-        'code_evaluation',
-        dataset_uri=dataset_uri,
-        tokenizer=tokenizer,
-        batch_size=batch_size,
-        max_seq_len=175,
-        pad_tok_id=tokenizer.eos_token_id,
-        num_fewshot=num_fewshot,
-        prompt_string='',
-        example_delimiter='\n',
-        continuation_delimiter=': ',
-        destination_path=str(Path(gathered_paths[0]) / 'icl.jsonl'),
-        generations_per_sample=generations_per_sample,
-    )
-
-    evaluator = Evaluator(
-        label='humaneval',
-        dataloader=dl,
-        metric_names=['InContextLearningCodeEvalAccuracy'],
-    )
-    model = HuggingFaceModel(
-        model=tiny_opt_model,
-        tokenizer=tiny_opt_tokenizer,
-        eval_metrics=[InContextLearningCodeEvalAccuracy()],
-        use_logits=True,
-    )
-
-    trainer = Trainer(model=model, max_duration='1ba', loggers=in_memory_logger)
-    torch.use_deterministic_algorithms(False)
-    trainer.eval(eval_dataloader=evaluator)
-    torch.use_deterministic_algorithms(True)
-    assert 'metrics/humaneval/InContextLearningCodeEvalAccuracy' in in_memory_logger.data.keys(
-    )
-    assert in_memory_logger.data[
-        'metrics/humaneval/InContextLearningCodeEvalAccuracy'][0][1].item() == 0
-
-
-@pytest.mark.parametrize('dataset_uri', ['human_eval_small.jsonl'])
-@pytest.mark.parametrize('num_fewshot', [0, 2])
-@pytest.mark.parametrize('generations_per_sample', [1])
-@pytest.mark.filterwarnings(r'ignore: Input length of input_ids is')
-@pytest.mark.gpu
-@pytest.mark.world_size(2)
-@pytest.mark.filterwarnings(
-    r'ignore:.*The dataloader_len \(2\) is greater than the length.*:UserWarning',
-)
-def test_code_eval_task_evaluation(
-    monkeypatch: pytest.MonkeyPatch,
-    num_fewshot: int,
-    dataset_uri: str,
-    tiny_gpt2_tokenizer: transformers.AutoTokenizer,
-    tiny_gpt2_model: transformers.AutoModelForCausalLM,
-    tmp_path: Path,
-    generations_per_sample: int,
-):
-
-    monkeypatch.setenv('CODE_EVAL_DEVICE', 'LOCAL')
-    in_memory_logger = InMemoryLogger(
-    )  # track the logged metrics in the in_memory_logger
-    local_data = os.path.join(os.path.dirname(__file__), 'local_data')
-    dataset_uri = f'{local_data}/{dataset_uri}'
-    tokenizer = tiny_gpt2_tokenizer
-    batch_size = 2
-    tmp_path_to_broadcast = str(os.path.abspath(tmp_path))
-    gathered_paths = dist.all_gather_object(tmp_path_to_broadcast)
-    dl = get_icl_task_dataloader(
-        'code_evaluation',
-        dataset_uri=dataset_uri,
-        tokenizer=tokenizer,
-        batch_size=batch_size,
-        max_seq_len=64 * num_fewshot,
-        pad_tok_id=tokenizer.eos_token_id,
-        num_fewshot=num_fewshot,
-        prompt_string='',
-        example_delimiter='\n',
-        continuation_delimiter=': ',
-        destination_path=str(Path(gathered_paths[0]) / 'icl.jsonl'),
-        generations_per_sample=generations_per_sample,
-    )
-
-    evaluator = Evaluator(
-        label='humaneval',
-        dataloader=dl,
-        metric_names=['InContextLearningCodeEvalAccuracy'],
-    )
-    model = HuggingFaceModel(
-        model=tiny_gpt2_model,
-        tokenizer=tiny_gpt2_tokenizer,
-        eval_metrics=[InContextLearningCodeEvalAccuracy()],
-        use_logits=True,
-    )
-
-    trainer = Trainer(model=model, max_duration='1ba', loggers=in_memory_logger)
-    torch.use_deterministic_algorithms(False)
-    trainer.eval(eval_dataloader=evaluator)
-    torch.use_deterministic_algorithms(True)
-    assert 'metrics/humaneval/InContextLearningCodeEvalAccuracy' in in_memory_logger.data.keys(
-    )
-    assert in_memory_logger.data[
-        'metrics/humaneval/InContextLearningCodeEvalAccuracy'][0][1].item() == 0
-
-
 @pytest.mark.parametrize('dataset_uri', ['lambada_small.jsonl'])
 def test_lm_spacing_dataloader(
     dataset_uri: str,
@@ -3019,13 +2387,15 @@ def test_lm_spacing_dataloader(
         dataset_uri=dataset_uri,
         tokenizer=tokenizer,
         batch_size=batch_size,
-        max_seq_len=seqlen,
-        pad_tok_id=tokenizer.eos_token_id,
-        num_fewshot=1,
-        prompt_string='',
-        example_delimiter='\n',
-        continuation_delimiter=' UNIQUE ',
         destination_path=str(tmp_path / 'icl.jsonl'),
+        kwargs={
+            'max_seq_len': seqlen,
+            'pad_tok_id': tokenizer.eos_token_id,
+            'num_fewshot': 1,
+            'prompt_string': '',
+            'example_delimiter': '\n',
+            'continuation_delimiter': ' UNIQUE ',
+        },
     )
     assert isinstance(dl, DataSpec)
     assert isinstance(dl.dataloader, DataLoader)  # pyright
@@ -3089,15 +2459,17 @@ def test_hf_dataloading_lm_dataloader(
         dataset_uri=dataset_uri,
         tokenizer=tokenizer,
         batch_size=batch_size,
-        max_seq_len=seqlen,
-        pad_tok_id=tokenizer.eos_token_id,
-        num_fewshot=0,
-        prompt_string='',
-        example_delimiter='\n',
-        continuation_delimiter=' ',
         destination_path=str(tmp_path / 'test_dataset_lm_juggernaut.jsonl'),
         hf_loading_vars=hf_loading_vars,
         hf_parsing_map=hf_parsing_map,
+        kwargs={
+            'max_seq_len': seqlen,
+            'pad_tok_id': tokenizer.eos_token_id,
+            'num_fewshot': 0,
+            'prompt_string': '',
+            'example_delimiter': '\n',
+            'continuation_delimiter': ' ',
+        },
     )
     assert isinstance(dl, DataSpec)
     assert isinstance(dl.dataloader, DataLoader)  # pyright
@@ -3170,16 +2542,18 @@ def test_hf_dataloading_custom_parsing(
         dataset_uri=dataset_uri,
         tokenizer=tokenizer,
         batch_size=batch_size,
-        max_seq_len=seqlen,
-        pad_tok_id=tokenizer.eos_token_id,
-        num_fewshot=num_fewshot,
-        prompt_string=prompt_string,
-        example_delimiter='\n',
-        question_prelimiter='Orbs: ',
-        continuation_delimiter='\nSpell:',
         destination_path=str(tmp_path / 'test_dataset_lm_juggernaut.jsonl'),
         hf_loading_vars=hf_loading_vars,
         hf_parsing_map=hf_parsing_map,
+        kwargs={
+            'max_seq_len': seqlen,
+            'pad_tok_id': tokenizer.eos_token_id,
+            'num_fewshot': num_fewshot,
+            'prompt_string': prompt_string,
+            'example_delimiter': '\n',
+            'prelimiter': 'Orbs: ',
+            'continuation_delimiter': '\nSpell:',
+        },
     )
     assert isinstance(dl, DataSpec)
     assert isinstance(dl.dataloader, DataLoader)  # pyright
@@ -3215,3 +2589,42 @@ def test_hf_dataloading_custom_parsing(
     )
     assert decoded_batch[0].endswith('Orbs: quas wex exort\nSpell:')
     assert decoded_batch[1].endswith('Orbs: quas quas quas\nSpell:')
+
+
+@pytest.mark.parametrize(
+    'prelimiter_key_name',
+    ['prelimiter', 'question_prelimiter'],
+)
+def test_bc_question_prelimiter(
+    mpt_tokenizer: transformers.PreTrainedTokenizerBase,
+    prelimiter_key_name: str,
+):
+    local_data = os.path.join(os.path.dirname(__file__), 'local_data')
+
+    dataset_uri = f'{local_data}/piqa_small.jsonl'
+
+    icl_tasks = [
+        {
+            'dataset_uri': dataset_uri,
+            'label': 'piqa',
+            'icl_task_type': 'multiple_choice',
+            'max_seq_len': 64,
+            'pad_tok_id': mpt_tokenizer.eos_token_id,
+            'num_fewshot': [0],
+            'prompt_string': '',
+            'example_delimiter': '\n',
+            'continuation_delimiter': ': ',
+            prelimiter_key_name: 'This is a question: ',
+        },
+    ]
+
+    evaluators, _ = build_icl_evaluators(
+        icl_tasks=icl_tasks,
+        tokenizer=mpt_tokenizer,
+        default_batch_size=2,
+        default_max_seq_len=128,
+    )
+
+    assert len(evaluators) == 1
+    evaluator = evaluators[0]
+    assert evaluator.dataloader.dataloader.dataset.prelimiter == 'This is a question: '  # type: ignore

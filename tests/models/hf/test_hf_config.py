@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import tempfile
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, Mapping
@@ -10,13 +9,22 @@ from unittest.mock import Mock, patch
 
 import pytest
 import torch
-from omegaconf import DictConfig
 from omegaconf import OmegaConf as om
-from transformers import AutoModelForCausalLM, PretrainedConfig
+from transformers import (
+    AutoConfig,
+    AutoModelForCausalLM,
+    PretrainedConfig,
+    PreTrainedModel,
+)
 
+from llmfoundry.models.hf.hf_fsdp import rgetattr
 from llmfoundry.models.mpt import MPTConfig, MPTForCausalLM
 from llmfoundry.utils import build_tokenizer
 from llmfoundry.utils.builders import build_composer_model
+from llmfoundry.utils.config_utils import (
+    set_config_overrides,
+    to_dict_container,
+)
 
 
 def test_remote_code_false_mpt(
@@ -49,9 +57,10 @@ def test_remote_code_false_mpt(
         ValueError,
         match='trust_remote_code must be set to True for MPT models.',
     ):
+        name = test_cfg.model.pop('name')
         _ = build_composer_model(
-            name=test_cfg.model.name,
-            cfg=test_cfg.model,
+            name=name,
+            cfg=to_dict_container(test_cfg.model),
             tokenizer=tokenizer,
         )
 
@@ -91,7 +100,7 @@ def test_tie_weights(tie_word_embeddings: bool):
         },
         {
             'attn_config': {
-                'attn_impl': 'flash',
+                'attn_pdrop': 1.0,
             },
         },
         {
@@ -102,7 +111,7 @@ def test_tie_weights(tie_word_embeddings: bool):
         {
             'max_seq_len': 1024,
             'attn_config': {
-                'attn_impl': 'flash',
+                'attn_pdrop': 1.0,
             },
             'init_config': {
                 'emb_init_std': 5,
@@ -130,21 +139,8 @@ def test_hf_config_override(
     model_cfg_overrides: Dict[str, Any],
     conf_path: str = 'scripts/train/yamls/pretrain/testing.yaml',
 ):
-    from transformers.models.auto.configuration_auto import CONFIG_MAPPING
-    CONFIG_MAPPING._extra_content['mpt'] = MPTConfig
-    AutoModelForCausalLM.register(MPTConfig, MPTForCausalLM)
-
     with open(conf_path) as f:
         test_cfg = om.load(f)
-
-    # Build Model
-    # For fast initialization, use `meta` device
-    print('Initializing model...')
-    device = 'cpu'
-    test_cfg.model.init_device = device
-    test_cfg.device = device
-    test_cfg.precision = 'fp16'
-    test_cfg.model.attn_config = {'attn_impl': 'torch', 'alibi': True}
 
     tokenizer_cfg: Dict[str, Any] = om.to_container(
         test_cfg.tokenizer,
@@ -153,33 +149,28 @@ def test_hf_config_override(
     tokenizer_name = tokenizer_cfg['name']
     tokenizer_kwargs = tokenizer_cfg.get('kwargs', {})
     tokenizer = build_tokenizer(tokenizer_name, tokenizer_kwargs)
-    model = build_composer_model(
-        name=test_cfg.model.name,
-        cfg=test_cfg.model,
-        tokenizer=tokenizer,
-    )
 
-    # save model
-    tmp_dir = tempfile.TemporaryDirectory()
-    save_path = tmp_dir.name
+    tiny_overrides = {
+        'n_layers': 2,
+        'd_model': 128,
+    }
 
-    tokenizer.save_pretrained(save_path)
-    model.config.save_pretrained(save_path)
-    torch.save(model.state_dict(), Path(save_path) / 'pytorch_model.bin')
+    model_cfg_overrides.update(tiny_overrides)
 
     # load hf causal lm model with config_overrides
     hf_model_config = deepcopy(test_cfg)
-    model_cfg = DictConfig({
+    model_cfg = om.create({
         'name': 'hf_causal_lm',
-        'pretrained_model_name_or_path': save_path,
+        'pretrained_model_name_or_path': 'mosaicml/mpt-7b',
         'pretrained': False,
         'config_overrides': model_cfg_overrides,
     })
     hf_model_config.model = model_cfg
 
+    name = hf_model_config.model.pop('name')
     hf_model = build_composer_model(
-        name=hf_model_config.model.name,
-        cfg=hf_model_config.model,
+        name=name,
+        cfg=to_dict_container(hf_model_config.model),
         tokenizer=tokenizer,
     )
 
@@ -192,7 +183,7 @@ def test_hf_config_override(
 
 
 @pytest.mark.skipif(
-    'HUGGING_FACE_HUB_TOKEN' not in os.environ,
+    'HF_TOKEN' not in os.environ,
     reason='CI does not have access to llama2',
 )
 def test_rope_scaling_override():
@@ -212,10 +203,10 @@ def test_rope_scaling_override():
         'pretrained': False,
         'init_device': 'cpu',
     }
-    model_cfg = om.create(model_cfg)
 
+    name = model_cfg.pop('name')
     model = build_composer_model(
-        name=model_cfg.name,
+        name=name,
         cfg=model_cfg,
         tokenizer=None,  # type: ignore
     )
@@ -225,7 +216,7 @@ def test_rope_scaling_override():
 
 
 @pytest.mark.skipif(
-    'HUGGING_FACE_HUB_TOKEN' not in os.environ,
+    'HF_TOKEN' not in os.environ,
     reason='CI does not have access to Dbrx',
 )
 def test_nested_override():
@@ -241,10 +232,10 @@ def test_nested_override():
         'pretrained': False,
         'init_device': 'meta',
     }
-    model_cfg = om.create(model_cfg)
 
+    name = model_cfg.pop('name')
     model = build_composer_model(
-        name=model_cfg.name,
+        name=name,
         cfg=model_cfg,
         tokenizer=None,  # type: ignore
     )
@@ -255,3 +246,99 @@ def test_nested_override():
     assert isinstance(model.config.ffn_config, PretrainedConfig)
     # Ensure the other values still exist and are not set back to their defaults
     assert model.config.ffn_config.moe_num_experts == 16
+
+
+@pytest.mark.gpu
+def test_use_flash():
+    model_cfg = {
+        'name': 'hf_causal_lm',
+        'pretrained_model_name_or_path': 'codellama/CodeLlama-7b-hf',
+        'config_overrides': {
+            'num_hidden_layers': 2,
+            'hidden_size': 32,
+            'intermediate_size': 64,
+            'torch_dtype': 'bfloat16',
+        },
+        'pretrained': False,
+        'init_device': 'cpu',
+        'use_flash_attention_2': True,
+    }
+
+    name = model_cfg.pop('name')
+    model = build_composer_model(
+        name=name,
+        cfg=model_cfg,
+        tokenizer=None,  # type: ignore
+    )
+
+    from transformers.models.llama.modeling_llama import (
+        LlamaFlashAttention2,
+    )
+    flash_attn_class = LlamaFlashAttention2
+    attention_layers_attr = 'model.model.layers'
+    attention_attr = 'self_attn'
+
+    # check that it actually used flash attention 2
+    assert model.model.config._attn_implementation == ('flash_attention_2')
+    attention_layer = rgetattr(
+        rgetattr(model, attention_layers_attr)[0],
+        attention_attr,
+    )
+    assert isinstance(attention_layer, flash_attn_class)
+
+    # Make sure that HF has not cast the parameters to bf16
+    assert next(model.parameters()).dtype == torch.float32
+
+
+def test_generation_config(tmp_path: Path):
+    # Create a small llama model to edit and save.
+    config = AutoConfig.from_pretrained('codellama/CodeLlama-7b-hf')
+    set_config_overrides(
+        config,
+        config_overrides={
+            'num_hidden_layers': 2,
+            'hidden_size': 32,
+            'intermediate_size': 64,
+        },
+    )
+    model = AutoModelForCausalLM.from_config(config)
+
+    assert isinstance(model, PreTrainedModel)
+    assert model.generation_config is not None
+
+    new_bos_token_id = 100
+
+    # Set the bos_token_id to something else
+    model.generation_config.bos_token_id = new_bos_token_id
+
+    # Generation config and model config no longer match
+    assert model.generation_config.bos_token_id != model.config.bos_token_id
+
+    save_dir = tmp_path / 'model'
+
+    # Save the model.
+    model.save_pretrained(save_dir)
+
+    # Now load the model from the save directory and check that the bos_token_id is the same as what we set.
+    model_cfg = {
+        'name': 'hf_causal_lm',
+        'pretrained_model_name_or_path': str(save_dir),
+        'use_auth_token': True,
+        'pretrained': False,
+        'init_device': 'cpu',
+    }
+
+    name = model_cfg.pop('name')
+    model = build_composer_model(
+        name=name,
+        cfg=model_cfg,
+        tokenizer=None,  # type: ignore
+    )
+
+    inner_model = model.model
+
+    assert isinstance(inner_model, PreTrainedModel)
+    assert inner_model.generation_config is not None
+
+    # save_pretrained and reloading with hf_causal_lm should use the bos_token_id we set from earlier.
+    assert inner_model.generation_config.bos_token_id == new_bos_token_id

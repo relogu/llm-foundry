@@ -13,18 +13,24 @@ import torch.nn as nn
 from composer.callbacks import Generate
 from composer.core import Evaluator
 from composer.loggers import WandBLogger
-from omegaconf import DictConfig, ListConfig
+from torch.distributed.checkpoint.default_planner import (
+    DefaultLoadPlanner,
+    DefaultSavePlanner,
+)
 from transformers import PreTrainedTokenizerBase
 
 from llmfoundry.callbacks import HuggingFaceCheckpointer
+from llmfoundry.registry import load_planners, save_planners
 from llmfoundry.tokenizers.tiktoken import TiktokenTokenizerWrapper
 from llmfoundry.utils.builders import (
     add_metrics_to_eval_loaders,
     build_callback,
     build_eval_loaders,
     build_evaluators,
+    build_load_planner,
     build_logger,
     build_optimizer,
+    build_save_planner,
     build_tokenizer,
 )
 
@@ -286,14 +292,15 @@ def test_build_evaluators_empty():
 def test_build_eval_loaders(monkeypatch: pytest.MonkeyPatch):
     tokenizer = TiktokenTokenizerWrapper(model_name='gpt-4')
 
-    eval_loader_cfg = DictConfig({
+    eval_loader_cfg = {
         'name': 'text',
         'dataset': {
+            'streams': None,
             # mocked, not needed
         },
         'drop_last': False,
         'num_workers': 8,
-    })
+    }
     monkeypatch.setattr(
         'llmfoundry.data.text_data.StreamingTextDataset',
         lambda *args,
@@ -307,7 +314,7 @@ def test_build_eval_loaders(monkeypatch: pytest.MonkeyPatch):
     assert eval_loaders[0].dataloader is not None
     assert eval_loaders[0].metric_names == []
 
-    multi_eval_loader_cfg = ListConfig([
+    multi_eval_loader_cfg = [
         {
             'name': 'text',
             'label': 'test1',
@@ -326,7 +333,7 @@ def test_build_eval_loaders(monkeypatch: pytest.MonkeyPatch):
             'drop_last': False,
             'num_workers': 8,
         },
-    ])
+    ]
     monkeypatch.setattr(
         'llmfoundry.data.text_data.StreamingTextDataset',
         lambda *args,
@@ -343,6 +350,34 @@ def test_build_eval_loaders(monkeypatch: pytest.MonkeyPatch):
     assert eval_loaders2[1].label == 'eval/test2'
     assert eval_loaders2[1].dataloader is not None
     assert eval_loaders2[1].metric_names == []
+
+
+def test_build_load_planner():
+    # Dummy LoadPlanner for testing
+    class DummyLoadPlanner(DefaultLoadPlanner):
+
+        def __init__(self, is_test: bool):
+            self.is_test = is_test
+
+    load_planners.register('dummy', func=DummyLoadPlanner)
+    load_planner = build_load_planner('dummy', is_test=True)
+
+    assert isinstance(load_planner, DummyLoadPlanner)
+    assert load_planner.is_test is True
+
+
+def test_build_save_planner():
+    # Dummy SavePlanner for testing
+    class DummySavePlanner(DefaultSavePlanner):
+
+        def __init__(self, is_test: bool):
+            self.is_test = is_test
+
+    save_planners.register('dummy', func=DummySavePlanner)
+    save_planner = build_save_planner('dummy', is_test=True)
+
+    assert isinstance(save_planner, DummySavePlanner)
+    assert save_planner.is_test is True
 
 
 def test_add_metrics_to_eval_loaders():

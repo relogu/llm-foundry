@@ -14,6 +14,7 @@ from streaming import MDSWriter
 from torch.utils.data import DataLoader
 
 from llmfoundry.data.finetuning.dataloader import build_finetuning_dataloader
+from llmfoundry.data.finetuning.tasks import StreamingFinetuningDataset
 from llmfoundry.data.packing import BinPackCollator, auto_packing_ratio
 from llmfoundry.utils.builders import build_tokenizer
 
@@ -121,9 +122,9 @@ def test_auto_packing(profile_packing: Mock):
     profile_packing.return_value = [(1, .9, 0), (2, .8, 0), (3, .7, .5)]
 
     packing_ratio = auto_packing_ratio(
-        dataloader_cfg=DictConfig({'dataset': {
+        dataloader_cfg={'dataset': {
             'max_seq_len': 2048,
-        }}),
+        }},
         tokenizer=None,
         device_batch_size=1,
     )  # Dummy values, profiling results are already set.
@@ -148,9 +149,9 @@ def test_dist_auto_packing(profile_packing: Mock):
                                         (3, .7, .5)]  # should pick 2
 
     packing_ratio = auto_packing_ratio(
-        dataloader_cfg=DictConfig({'dataset': {
+        dataloader_cfg={'dataset': {
             'max_seq_len': 2048,
-        }}),
+        }},
         tokenizer=None,
         device_batch_size=1,
     )  # Dummy values, profiling results are already set.
@@ -177,7 +178,6 @@ def test_auto_packing_with_streaming_dataloader(tmp_path: Path):
     with MDSWriter(out=remote_dir, columns=columns, compression=None) as out:
         out.write({'prompt': 'HELLO', 'response': 'WORLD'})
     cfg = DictConfig({
-        'name': 'finetuning',
         'dataset': {
             'remote': remote_dir,
             'local': local_dir,
@@ -196,8 +196,8 @@ def test_auto_packing_with_streaming_dataloader(tmp_path: Path):
     })
 
     loader = build_finetuning_dataloader(
-        cfg,
-        tokenizer,
+        **cfg,
+        tokenizer=tokenizer,
         device_batch_size=6,
     ).dataloader
 
@@ -206,6 +206,15 @@ def test_auto_packing_with_streaming_dataloader(tmp_path: Path):
         batch_ix += 1
         if batch_ix >= 3:
             break
+
+    assert isinstance(loader, DataLoader)
+    assert isinstance(loader.dataset, StreamingFinetuningDataset)
+    assert loader.dataset.packing_ratio is not None
+    assert isinstance(loader.batch_size, int)
+    assert loader.dataset.packing_ratio == int(loader.batch_size / 6)
+
+    state_dict = loader.dataset.state_dict(num_samples=2, from_beginning=False)
+    assert state_dict['sample_in_epoch'] == 2 * loader.dataset.packing_ratio
 
 
 @pytest.mark.parametrize('packing_ratio', ['auto', 2.0])
@@ -217,8 +226,7 @@ def test_packing_with_dataloader(packing_ratio: Any):
     """Tests that packing works with a dataloader."""
     reproducibility.seed_all(17)
     tokenizer = build_tokenizer('gpt2', {})
-    cfg = DictConfig({
-        'name': 'finetuning',
+    cfg = {
         'dataset': {
             'hf_name': 'tatsu-lab/alpaca',
             'split': 'train',
@@ -236,11 +244,11 @@ def test_packing_with_dataloader(packing_ratio: Any):
         'prefetch_factor': None,
         'persistent_workers': False,
         'timeout': 0,
-    })
+    }
 
     loader = build_finetuning_dataloader(
-        cfg,
-        tokenizer,
+        **cfg,
+        tokenizer=tokenizer,
         device_batch_size=6,
     ).dataloader
 

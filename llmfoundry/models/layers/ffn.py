@@ -20,6 +20,7 @@ from llmfoundry.layers_registry import (
 )
 from llmfoundry.models.layers.dmoe import dMoE
 from llmfoundry.models.layers.layer_builders import build_fc
+from llmfoundry.models.utils.config_defaults import fc_type_defaults
 
 try:
     import transformer_engine.pytorch as te
@@ -52,6 +53,19 @@ _FFN_ACT_FN_DEFAULT = {
 }
 
 
+def quickgelu_activation(input: torch.Tensor) -> torch.Tensor:
+    """Applies GELU approximation that is fast but somewhat inaccurate.
+
+    Args:
+        input (torch.Tensor): Input tensor of shape(*), where * means any
+            number of dimensions
+
+    Returns:
+        torch.Tensor: Tensor with same shape as input tensor
+    """
+    return input * torch.sigmoid(1.702 * input)
+
+
 def resolve_ffn_act_fn(
     config: Optional[dict] = None,
 ) -> Callable[[torch.Tensor], torch.Tensor]:
@@ -69,10 +83,13 @@ def resolve_ffn_act_fn(
         config = _FFN_ACT_FN_DEFAULT
     config = deepcopy(config)
     name = config.pop('name')
-    if not hasattr(torch.nn.functional, name):
-        raise ValueError(f'Unrecognized activation function name ({name}).')
-    act = getattr(torch.nn.functional, name)
-    return partial(act, **config)
+    if name == 'quick_gelu':
+        return quickgelu_activation
+    else:
+        if not hasattr(torch.nn.functional, name):
+            raise ValueError(f'Unrecognized activation function name ({name}).')
+        act = getattr(torch.nn.functional, name)
+        return partial(act, **config)
 
 
 _DEFAULT_ACT_FN = resolve_ffn_act_fn(_FFN_ACT_FN_DEFAULT)
@@ -127,7 +144,7 @@ class MPTMLP(nn.Module):
         self,
         d_model: int,
         expansion_ratio: Union[int, float],
-        fc_type: str = 'torch',
+        fc_type: Optional[dict[str, Any]] = None,
         ffn_hidden_size: Optional[int] = None,
         act_fn: Callable[[torch.Tensor], torch.Tensor] = _DEFAULT_ACT_FN,
         device: Optional[str] = None,
@@ -139,24 +156,27 @@ class MPTMLP(nn.Module):
             expansion_ratio,
             ffn_hidden_size,
         )
-        self.fc_kwargs: dict[str, Any] = {
-            'bias': bias,
-        }
 
-        self.fc_kwargs['device'] = device
+        # Usually, fc_type dict should be passed in through MPTBlock's __init__ function.
+        if fc_type is None:
+            fc_type = fc_type_defaults
+            fc_type['bias'] = bias
+            fc_type['device'] = device
+        self.fc_type = fc_type
+        self.fc_type_name = self.fc_type['name']
 
         self.up_proj = build_fc(
-            name=fc_type,
+            name=self.fc_type_name,
             in_features=d_model,
             out_features=ffn_hidden_size,
-            fc_kwargs=self.fc_kwargs,
+            fc_kwargs=self.fc_type,
         )
         self.act = act_fn
         self.down_proj = build_fc(
-            name=fc_type,
+            name=self.fc_type_name,
             in_features=ffn_hidden_size,
             out_features=d_model,
-            fc_kwargs=self.fc_kwargs,
+            fc_kwargs=self.fc_type,
         )
         self.down_proj._is_residual = True
 
@@ -170,7 +190,7 @@ class MPTGLU(MPTMLP):
         self,
         d_model: int,
         expansion_ratio: Union[int, float],
-        fc_type: str = 'torch',
+        fc_type: Optional[dict[str, Any]] = None,
         ffn_hidden_size: Optional[int] = None,
         act_fn: Callable[[torch.Tensor], torch.Tensor] = _DEFAULT_ACT_FN,
         device: Optional[str] = None,
@@ -185,11 +205,12 @@ class MPTGLU(MPTMLP):
             device=device,
             bias=bias,
         )
+
         self.gate_proj = build_fc(
-            name=fc_type,
+            name=self.fc_type_name,
             in_features=d_model,
             out_features=self.up_proj.out_features,
-            fc_kwargs=self.fc_kwargs,
+            fc_kwargs=self.fc_type,
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -199,7 +220,7 @@ class MPTGLU(MPTMLP):
 def build_mptglu(
     d_model: int,
     expansion_ratio: Union[int, float],
-    fc_type: str = 'torch',
+    fc_type: Optional[dict[str, Any]] = None,
     ffn_hidden_size: Optional[int] = None,
     ffn_act_fn: Optional[dict] = None,
     device: Optional[str] = None,
@@ -219,7 +240,7 @@ def build_mptglu(
 def build_mptmlp(
     d_model: int,
     expansion_ratio: Union[int, float],
-    fc_type: str = 'torch',
+    fc_type: Optional[dict[str, Any]] = None,
     ffn_hidden_size: Optional[int] = None,
     ffn_act_fn: Optional[dict] = None,
     device: Optional[str] = None,
@@ -239,7 +260,7 @@ def build_mptmlp(
 def build_te_ln_mlp(
     d_model: int,
     expansion_ratio: Union[int, float],
-    fc_type: str = 'torch',
+    fc_type: Optional[dict[str, Any]] = None,
     ffn_hidden_size: Optional[int] = None,
     ffn_act_fn: Optional[dict] = None,
     device: Optional[str] = None,
@@ -280,7 +301,7 @@ def build_torch_dmoe(
     moe_normalize_expert_weights = kwargs.pop('moe_normalize_expert_weights')
     uniform_expert_assignment = kwargs.pop('uniform_expert_assignment')
 
-    fc_type = kwargs.pop('fc_type', 'torch')
+    fc_type = kwargs.pop('fc_type', None)
     del fc_type  # Unused
 
     if len(kwargs) > 0:
@@ -305,7 +326,7 @@ def build_torch_dmoe(
     )
 
 
-def _mb_setup_args(
+def mb_setup_args(
     d_model: int,
     expansion_ratio: Union[int, float],
     ffn_hidden_size: Optional[int],
@@ -314,6 +335,21 @@ def _mb_setup_args(
     bias: bool,
     kwargs: dict[str, Any],
 ) -> tuple['megablocks.layers.arguments.Arguments', int, ProcessGroup]:
+    """Setup the MegaBlocks args.
+
+    Args:
+        d_model (int): The dimension of the input and output of the FFN.
+        expansion_ratio (Union[int, float]): The expansion ratio of the FFN.
+        ffn_hidden_size (Optional[int]): The hidden size of the FFN.
+        ffn_act_fn (Optional[dict]): The activation function of the FFN.
+        device (Optional[str]): The device to run the FFN on.
+        bias (bool): Whether to include bias in the FFN.
+        kwargs (dict[str, Any]): Additional kwargs.
+
+    Returns:
+        tuple['megablocks.layers.arguments.Arguments', int, ProcessGroup]:
+            The MegaBlocks args, the MoE world size, and the expert parallel group.
+    """
     if megablocks is None:
         raise RuntimeError(
             'Requirements for megablocks not installed; see install instructions in `README.md`.',
@@ -345,18 +381,60 @@ def _mb_setup_args(
     return args, moe_world_size, expert_parallel_group
 
 
-def _patch_ffn_mb(
+def attach_ffn_mb_args(
     ffn: nn.Module,
-    moe_world_size: int,
     expert_parallel_group: ProcessGroup,
-    device_mesh: DeviceMesh,
     args: 'megablocks.layers.arguments.Arguments',
 ):
-    # Attach args to MLP directly for use in param_init_fn
+    """Attach arguments used in parameter initialization to the FFN.
+
+    Args:
+        ffn (nn.Module): The FFN module.
+        expert_parallel_group (ProcessGroup): The expert parallel process group.
+        args (megablocks.layers.arguments.Arguments): The arguments for MegaBlocks.
+    """
     ffn.experts.mlp.hidden_size = args.ffn_hidden_size
     ffn.experts.mlp.expert_parallel_group = expert_parallel_group
     ffn.experts.mlp.weight_parallel_group = args.weight_parallel_group
 
+
+def get_fsdp_submesh_2d(device_mesh: DeviceMesh):
+    """Get the submesh for FSDP.
+
+    Args:
+        device_mesh (DeviceMesh): The full device mesh.
+
+    Returns:
+        DeviceMesh: The submesh for FSDP.
+    """
+    if device_mesh.mesh.ndim == 2:
+        submesh = device_mesh['weight_parallel']
+    elif device_mesh.mesh.ndim == 3:
+        raise RuntimeError(f'HSDP + MoE is not supported.')
+    else:
+        raise ValueError(f'{device_mesh.mesh.ndim=} not supported for MoE.')
+
+    return submesh
+
+
+def set_ffn_device_mesh(
+    ffn: nn.Module,
+    moe_world_size: int,
+    device_mesh: DeviceMesh,
+    get_fsdp_submesh: Callable[[DeviceMesh], DeviceMesh],
+):
+    """Sets the device mesh in FSDP kwargs.
+
+    Args:
+        ffn (nn.Module): The FFN module.
+        moe_world_size (int): The MoE world size.
+        device_mesh (DeviceMesh): The full device mesh.
+        get_fsdp_submesh (Callable[[DeviceMesh], DeviceMesh]): A function to get the fsdp submesh.
+
+    Raises:
+        RuntimeError: If the device mesh is 3D.
+        ValueError: If the device mesh is not 2D or 3D.
+    """
     if moe_world_size > 1:
         expert_mesh = device_mesh['expert_parallel']
         expert_placements: List[Placement] = [Shard(0)]
@@ -372,16 +450,20 @@ def _patch_ffn_mb(
         for name, dtensorified_param in dtensorified_params:
             ffn.experts.mlp.register_parameter(name, dtensorified_param)
 
-        if device_mesh.mesh.ndim == 2:
-            submesh = device_mesh['weight_parallel']
-        elif device_mesh.mesh.ndim == 3:
-            raise RuntimeError(f'HSDP + MoE is not supported.')
-        else:
-            raise ValueError(f'{device_mesh.mesh.ndim=} not supported for MoE.')
+        submesh = get_fsdp_submesh(device_mesh)
 
         ffn.experts._fsdp_kwargs_dict = {
             'device_mesh': submesh,
         }
+
+
+def moe_fused_init_setup(ffn: nn.Module,):
+    """Attach the _stack_dim attribute to the FFN.
+
+    Args:
+        ffn (nn.Module): The FFN module.
+    """
+    ffn.experts.mlp._stack_dim = 0
 
 
 def build_mb_moe(
@@ -398,7 +480,7 @@ def build_mb_moe(
             'Requirements for megablocks not installed; see install instructions in `README.md`.',
         )
 
-    args, moe_world_size, expert_parallel_group = _mb_setup_args(
+    args, moe_world_size, expert_parallel_group = mb_setup_args(
         d_model=d_model,
         expansion_ratio=expansion_ratio,
         ffn_hidden_size=ffn_hidden_size,
@@ -410,19 +492,41 @@ def build_mb_moe(
 
     ffn = megablocks.layers.moe.MoE(args)
 
-    # Fused initialization setup
-    # For param_init_fn, enables shape based init of stacked layers
-    ffn.experts.mlp._stack_dim = 0
-
-    _patch_ffn_mb(
+    moe_fused_init_setup(ffn=ffn,)
+    attach_ffn_mb_args(
+        ffn=ffn,
+        expert_parallel_group=expert_parallel_group,
+        args=args,
+    )
+    set_ffn_device_mesh(
         ffn=ffn,
         moe_world_size=moe_world_size,
-        expert_parallel_group=expert_parallel_group,
         device_mesh=kwargs['device_mesh'],
-        args=args,
+        get_fsdp_submesh=get_fsdp_submesh_2d,
     )
 
     return ffn
+
+
+def dmoe_fused_init_setup(
+    ffn: nn.Module,
+    args: 'megablocks.layers.arguments.Arguments',
+    moe_world_size: int,
+):
+    """Attach the _fused attribute to the dMoE model.
+
+    This is used for parameter initialization.
+
+    Args:
+        ffn (nn.Module): The FFN module.
+        args (megablocks.layers.arguments.Arguments): The arguments for MegaBlocks.
+        moe_world_size (int): The MoE world size.
+    """
+    n_exp = min(1, args.moe_num_experts // moe_world_size)
+    ffn.experts.mlp._fused = (
+        0,
+        [(n + 1) * args.ffn_hidden_size for n in range(n_exp - 1)],
+    )
 
 
 def build_mb_dmoe(
@@ -439,7 +543,7 @@ def build_mb_dmoe(
             'Requirements for megablocks not installed; see install instructions in `README.md`.',
         )
 
-    args, moe_world_size, expert_parallel_group = _mb_setup_args(
+    args, moe_world_size, expert_parallel_group = mb_setup_args(
         d_model=d_model,
         expansion_ratio=expansion_ratio,
         ffn_hidden_size=ffn_hidden_size,
@@ -451,20 +555,21 @@ def build_mb_dmoe(
 
     ffn = megablocks.layers.dmoe.dMoE(args)
 
-    # Fused initialization setup
-    # For param_init_fn, enables shape based init of fused layers
-    n_exp = min(1, args.moe_num_experts // moe_world_size)
-    ffn.experts.mlp._fused = (
-        0,
-        [(n + 1) * args.ffn_hidden_size for n in range(n_exp - 1)],
+    dmoe_fused_init_setup(
+        ffn=ffn,
+        args=args,
+        moe_world_size=moe_world_size,
     )
-
-    _patch_ffn_mb(
+    attach_ffn_mb_args(
+        ffn=ffn,
+        expert_parallel_group=expert_parallel_group,
+        args=args,
+    )
+    set_ffn_device_mesh(
         ffn=ffn,
         moe_world_size=moe_world_size,
-        expert_parallel_group=expert_parallel_group,
         device_mesh=kwargs['device_mesh'],
-        args=args,
+        get_fsdp_submesh=get_fsdp_submesh_2d,
     )
 
     return ffn

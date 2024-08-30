@@ -26,10 +26,12 @@ __all__ = [
 def build_norm(
     name: str,
     normalized_shape: Union[int, List[int], torch.Size],
+    eps: Optional[float] = 1e-5,
     device: Optional[str] = None,
 ):
     kwargs = {
         'normalized_shape': normalized_shape,
+        'eps': eps,
         'device': device,
     }
 
@@ -107,7 +109,7 @@ def build_fc(
     kwargs = {
         'in_features': in_features,
         'out_features': out_features,
-        **fc_kwargs,
+        **{k: v for k, v in fc_kwargs.items() if k != 'name'},
     }
 
     return construct_from_registry(

@@ -4,7 +4,6 @@
 """Build a StreamingTextDataset dataset and dataloader for training."""
 
 import inspect
-import os
 from itertools import islice
 from typing import (
     Any,
@@ -20,13 +19,15 @@ from typing import (
 import numpy as np
 import torch
 from composer.core.data_spec import DataSpec
-from omegaconf import DictConfig
-from omegaconf import OmegaConf as om
 from streaming import Stream, StreamingDataset
 from torch.utils.data import DataLoader
 from transformers import PreTrainedTokenizerBase
 
 from llmfoundry import registry
+from llmfoundry.data import (
+    SUPPORTED_MDS_ENCODING_TYPES,
+    stream_remote_local_validate,
+)
 from llmfoundry.utils.registry_utils import construct_from_registry
 
 __all__ = [
@@ -43,6 +44,9 @@ class StreamingTextDataset(StreamingDataset):
         tokenizer (Tokenizer): HuggingFace tokenizer to
             tokenize samples.
         max_seq_len (int): The max sequence length of each sample.
+        token_encoding_type (str): The encoding type of the tokenized samples. This is only used
+            for legacy datasets that have been written directly as 'bytes' instead of numpy
+            arrays. Types are auto-inferred for numpy arrays. Defaults to 'int64'.
         streams (Sequence[Stream], optional): One or more Streams to stream/cache samples from,
             which may be upsampled or downsampled. StreamingDataset uses either ``streams`` or
             ``remote``/``local``. Defaults to ``None``.
@@ -108,6 +112,7 @@ class StreamingTextDataset(StreamingDataset):
         self,
         tokenizer: PreTrainedTokenizerBase,
         max_seq_len: int,
+        token_encoding_type: str = 'int64',
         streams: Optional[Sequence[Stream]] = None,
         remote: Optional[str] = None,
         local: Optional[str] = None,
@@ -139,13 +144,21 @@ class StreamingTextDataset(StreamingDataset):
                 f'StreamingTextDataset() got an unexpected keyword argument: {kwargs}',
             )
 
-        if local is not None and (remote is None or (local == remote)):
-            if os.path.isdir(local):
-                contents = set(os.listdir(local))
-                if split not in contents:
-                    raise ValueError(
-                        f'local directory {local} does not contain split {split}',
-                    )
+        if token_encoding_type not in SUPPORTED_MDS_ENCODING_TYPES:
+            raise ValueError(
+                f'The token_encoding_type must be one of {SUPPORTED_MDS_ENCODING_TYPES}, but got {token_encoding_type}',
+            )
+        self.token_encoding_type = token_encoding_type
+
+        if streams is None:
+            stream_remote_local_validate(remote, local, split)
+        else:
+            for stream in streams:
+                stream_remote_local_validate(
+                    stream.remote,
+                    stream.local,
+                    split,
+                )
 
         # TODO: discover where yamls are being converted incorrect, but temporary workaround
         if isinstance(shuffle_block_size, float):
@@ -199,10 +212,18 @@ class StreamingTextDataset(StreamingDataset):
         self,
         sample: Dict[str, Any],
     ) -> torch.Tensor:
-        return torch.from_numpy(
-            np.frombuffer(sample['tokens'],
-                          dtype=np.int64)[:self.max_seq_len].copy(),
-        )
+        # Modeling code still expects int64 tensors.
+        if isinstance(sample['tokens'], np.ndarray):
+            return torch.from_numpy(
+                sample['tokens'][:self.max_seq_len].copy(),
+            ).to(torch.int64)
+        else:
+            return torch.from_numpy(
+                np.frombuffer(
+                    sample['tokens'],
+                    dtype=getattr(np, self.token_encoding_type),
+                )[:self.max_seq_len].copy(),
+            ).to(torch.int64)
 
     # How to process a sample
     def __getitem__(self,
@@ -268,39 +289,45 @@ class ConcatenatedSequenceCollatorWrapper:
         return torch.cat([left_zeros, cumulative_sep[:, :-1]], dim=1)
 
 
-def build_streams(dataset_cfg: DictConfig):
-    streams_dict = dataset_cfg.pop('streams', None)
+def build_streams(streams: Optional[Dict[str, Any]] = None,):
+    streams_dict = streams
     # build streams
-    streams = None
+    streams_ret = []
     if streams_dict is not None:
-        streams = []
-        for stream in streams_dict.values():
-            # stream is the streams kwargs
-            # fwd all kwargs with **stream allows streaming to check args
-            streams.append(Stream(**stream))
-    return streams
+        streams_ret = [Stream(**stream) for stream in streams_dict.values()]
+    return streams_ret
 
 
 def build_text_dataloader(
-    cfg: DictConfig,
     tokenizer: PreTrainedTokenizerBase,
     device_batch_size: Union[int, float],
+    dataset: Dict[str, Any],
+    drop_last: bool,
+    num_workers: int,
+    pin_memory: bool = True,
+    prefetch_factor: int = 2,
+    persistent_workers: bool = True,
+    timeout: int = 0,
 ) -> DataSpec:
-    assert cfg.name == 'text', f'Tried to build text dataloader with cfg.name={cfg.name}'
+
+    dataset_cfg = dataset
 
     # get kwargs
-    cfg.dataset['replication'], dataset_batch_size = construct_from_registry(
+    dataset_cfg['replication'], dataset_batch_size = construct_from_registry(
         name='dataset_replication_validator',
         registry=registry.dataset_replication_validators,
         partial_function=False,
         kwargs={
-            'cfg': cfg,
+            'dataset_cfg': dataset_cfg,
             'tokenizer': tokenizer,
             'device_batch_size': device_batch_size,
         },
     )
 
-    streams = build_streams(cfg.dataset)
+    streams = build_streams(
+        streams=dataset_cfg.pop('streams')
+        if 'streams' in dataset_cfg else None,
+    )
 
     valid_streaming_text_dataset_parameters = inspect.signature(
         StreamingTextDataset,
@@ -308,39 +335,50 @@ def build_text_dataloader(
 
     dataset_config_subset_for_streaming_text_dataset = {
         k: v
-        for k, v in cfg.dataset.items()
+        for k, v in dataset_cfg.items()
         if k in valid_streaming_text_dataset_parameters
     }
 
     # build dataset potentially with streams
-    dataset = StreamingTextDataset(
+    text_dataset = StreamingTextDataset(
         tokenizer=tokenizer,
         streams=streams,
         batch_size=dataset_batch_size,
         **dataset_config_subset_for_streaming_text_dataset,
     )
 
+    dataloader_cfg = {
+        'name': 'text',
+        'dataset': dataset_cfg,
+        'drop_last': drop_last,
+        'num_workers': num_workers,
+        'pin_memory': pin_memory,
+        'prefetch_factor': prefetch_factor,
+        'persistent_workers': persistent_workers,
+        'timeout': timeout,
+    }
+
     collate_fn, dataloader_batch_size = construct_from_registry(
         name='text_collator',
         registry=registry.collators,
         partial_function=False,
         kwargs={
-            'cfg': cfg,
-            'tokenizer': dataset.tokenizer,
+            'dataloader_cfg': dataloader_cfg,
+            'tokenizer': tokenizer,
             'dataset_batch_size': dataset_batch_size,
         },
     )
 
     dl = DataLoader(
-        dataset,
+        text_dataset,
         collate_fn=collate_fn,
         batch_size=dataloader_batch_size,
-        drop_last=cfg.drop_last,
-        num_workers=cfg.num_workers,
-        pin_memory=cfg.get('pin_memory', True),
-        prefetch_factor=cfg.get('prefetch_factor', 2),
-        persistent_workers=cfg.get('persistent_workers', True),
-        timeout=cfg.get('timeout', 0),
+        drop_last=drop_last,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        prefetch_factor=prefetch_factor,
+        persistent_workers=persistent_workers,
+        timeout=timeout,
     )
 
     return construct_from_registry(
@@ -349,7 +387,7 @@ def build_text_dataloader(
         partial_function=False,
         kwargs={
             'dl': dl,
-            'dataset_cfg': cfg.dataset,
+            'dataset_cfg': dataset_cfg,
         },
     )
 
@@ -415,14 +453,17 @@ if __name__ == '__main__':
         'drop_last': False,
         'num_workers': 4,
     }
-    cfg = om.create(cfg)
     device_batch_size = 2
 
     tokenizer_name = args.tokenizer
     tokenizer_kwargs = {'model_max_length': args.max_seq_len}
     tokenizer = build_tokenizer(tokenizer_name, tokenizer_kwargs)
 
-    loader = build_text_dataloader(cfg, tokenizer, device_batch_size).dataloader
+    loader = build_text_dataloader(
+        **cfg,
+        tokenizer=tokenizer,
+        device_batch_size=device_batch_size,
+    ).dataloader
     assert isinstance(loader, DataLoader)
     assert isinstance(loader.dataset, StreamingTextDataset)
     tokenizer = loader.dataset.tokenizer
