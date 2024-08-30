@@ -40,6 +40,7 @@ class HuggingFaceModelWithFSDP(HuggingFaceModel):
         shift_labels: bool = False,
         init_device: Optional[str] = None,
         peft_config: Optional['PeftConfig'] = None,
+        allow_embedding_resizing: bool = False,
     ):
         super().__init__(
             model,
@@ -50,6 +51,7 @@ class HuggingFaceModelWithFSDP(HuggingFaceModel):
             shift_labels=shift_labels,
             peft_config=peft_config,
             should_save_peft_only=True,
+            allow_embedding_resizing=allow_embedding_resizing,
         )
 
         self.prepare_inner_model(self.model, init_device)

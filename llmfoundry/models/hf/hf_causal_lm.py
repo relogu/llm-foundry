@@ -64,6 +64,8 @@ class ComposerHFCausalLM(HuggingFaceModelWithFSDP):
             cfg.load_in_8bit (bool, optional): Whether to load the model in 8-bit mode. Default: ``False``.
             cfg.init_device (str, optional): Which device to initialize the model on. Default: ``'cpu'``.
             cfg.use_flash_attention_2 (bool, optional): Whether to use flash-attention 2. Default: ``False``.
+            cfg.allow_embedding_resizing (bool, optional): Whether to resize the embedding of the configured
+                model to match that of the tokenizer. Default: ``False``.
         tokenizer (PreTrainedTokenizer): The tokenizer that the model will use.
     """
 
@@ -72,6 +74,9 @@ class ComposerHFCausalLM(HuggingFaceModelWithFSDP):
         om_model_config: DictConfig,
         tokenizer: PreTrainedTokenizerBase,
     ):
+        
+        # NOTE: Extract whether to allow embedding resizing from the config
+        allow_embedding_resizing = om_model_config.pop('allow_embedding_resizing', False)
         model = ComposerHFCausalLM.build_inner_model(om_model_config)
 
         train_metrics, eval_metrics = ComposerHFCausalLM.build_metrics(
@@ -104,6 +109,7 @@ class ComposerHFCausalLM(HuggingFaceModelWithFSDP):
             eval_metrics=eval_metrics,
             init_device=init_device,
             peft_config=peft_config,
+            allow_embedding_resizing=allow_embedding_resizing,
         )
 
     @staticmethod
