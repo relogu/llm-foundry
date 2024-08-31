@@ -8,7 +8,7 @@ import os
 import pathlib
 import shutil
 from argparse import Namespace
-from typing import Any, Callable, Dict, Optional, cast
+from typing import Any, Callable, Optional, cast
 from unittest.mock import ANY, MagicMock, patch
 
 import catalogue
@@ -314,7 +314,7 @@ class MockSpawnProcess:
     multiprocessing, so we need to patch SpawnProcess for tests.
     """
 
-    def __init__(self, target: Callable, kwargs: Dict[str, Any]):
+    def __init__(self, target: Callable, kwargs: dict[str, Any]):
         self.target = target
         self.kwargs = kwargs
 
@@ -519,7 +519,6 @@ def _get_model_and_tokenizer(
                 'moe_num_experts': 4,
                 'moe_top_k': 2,
                 'moe_world_size': 1,
-                'moe_weight_parallelism': False,
                 'uniform_expert_assignment': False,
             },
             'max_seq_len': max_seq_len,
@@ -1251,8 +1250,6 @@ def test_mptmoe_huggingface_conversion_callback(
                 2,
             'moe_world_size':
                 2,
-            'moe_weight_parallelism':
-                False,
             'uniform_expert_assignment':
                 True,
             'mlp_impl':
@@ -1283,11 +1280,12 @@ def test_mptmoe_huggingface_conversion_callback(
         'activation_checkpointing_reentrant': False,
         'activation_cpu_offload': False,
         'limit_all_gathers': True,
-        'device_mesh': [1, 4] if sharding_strategy == 'HYBRID_SHARD' else [
-            4,
-        ],
         'use_orig_params': True,
+        'data_parallel_shard_degree': 4,
     }
+
+    if sharding_strategy == 'HYBRID_SHARD':
+        fsdp_config['data_parallel_shard_degree'] = 1
 
     tiny_dataset_folder_path = os.path.join(os.getcwd(), 'test-ift-data-small')
     tiny_dataset_path = os.path.join(tiny_dataset_folder_path, 'train.jsonl')

@@ -6,7 +6,7 @@
 import logging
 from copy import deepcopy
 from functools import partial
-from typing import Any, Callable, List, Optional, Union
+from typing import Any, Callable, Optional, Union
 
 import torch
 import torch.nn as nn
@@ -126,7 +126,7 @@ def resolve_ffn_hidden_size(
 def dtensorify_param(
     param: nn.Parameter,
     mesh: DeviceMesh,
-    placements: List[Placement],
+    placements: list[Placement],
 ):
     """Construct a DTensor from an already sharded local parameter."""
     param_dtensor = DTensor.from_local(
@@ -214,7 +214,9 @@ class MPTGLU(MPTMLP):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.down_proj(self.act(self.gate_proj(x)) * self.up_proj(x))
+        return self.down_proj(
+            self.act(self.gate_proj(x)).to(device=x.device) * self.up_proj(x),
+        )
 
 
 def build_mptglu(
@@ -395,7 +397,6 @@ def attach_ffn_mb_args(
     """
     ffn.experts.mlp.hidden_size = args.ffn_hidden_size
     ffn.experts.mlp.expert_parallel_group = expert_parallel_group
-    ffn.experts.mlp.weight_parallel_group = args.weight_parallel_group
 
 
 def get_fsdp_submesh_2d(device_mesh: DeviceMesh):
@@ -437,7 +438,7 @@ def set_ffn_device_mesh(
     """
     if moe_world_size > 1:
         expert_mesh = device_mesh['expert_parallel']
-        expert_placements: List[Placement] = [Shard(0)]
+        expert_placements: list[Placement] = [Shard(0)]
         # Register in two loops as you cannot overwrite parameters while iterating over named_parameters()
         dtensorified_params = [(
             name,

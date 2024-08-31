@@ -7,6 +7,7 @@ from composer.callbacks import (
     LRMonitor,
     MemoryMonitor,
     MemorySnapshot,
+    NaNMonitor,
     OOMObserver,
     OptimizerMonitor,
     RuntimeEstimator,
@@ -17,10 +18,12 @@ from composer.callbacks import (
 
 from llmfoundry.callbacks.async_eval_callback import AsyncEval
 from llmfoundry.callbacks.curriculum_learning_callback import CurriculumLearning
+from llmfoundry.callbacks.env_logging_callback import EnvironmentLoggingCallback
 from llmfoundry.callbacks.eval_gauntlet_callback import EvalGauntlet
 from llmfoundry.callbacks.eval_output_logging_callback import EvalOutputLogging
 from llmfoundry.callbacks.fdiff_callback import FDiffMetrics
 from llmfoundry.callbacks.hf_checkpointer import HuggingFaceCheckpointer
+from llmfoundry.callbacks.kill_loss_spike_callback import KillLossSpike
 from llmfoundry.callbacks.log_mbmoe_tok_per_expert_callback import (
     MegaBlocksMoE_TokPerExpert,
 )
@@ -60,8 +63,10 @@ callbacks.register('mbmoe_tok_per_expert', func=MegaBlocksMoE_TokPerExpert)
 callbacks.register('activation_monitor_full_model', func=ActivationMonitorFullModel)
 callbacks.register('activation_monitor', func=ActivationMonitor)
 callbacks.register('run_timeout', func=RunTimeoutCallback)
-
 callbacks.register('loss_perp_v_len', func=LossPerpVsContextLengthLogger)
+callbacks.register('env_logging', func=EnvironmentLoggingCallback)
+callbacks.register('nan_monitor', func=NaNMonitor)
+callbacks.register('kill_loss_spike', func=KillLossSpike)
 
 callbacks_with_config.register('async_eval', func=AsyncEval)
 callbacks_with_config.register('curriculum_learning', func=CurriculumLearning)
@@ -78,4 +83,5 @@ __all__ = [
     'AsyncEval',
     'CurriculumLearning',
     'LossPerpVsContextLengthLogger',
+    'KillLossSpike',
 ]

@@ -5,7 +5,7 @@
 
 import copy
 import warnings
-from typing import Any, Dict, Optional, Union
+from typing import Any, Optional, Union
 
 from transformers import PretrainedConfig
 
@@ -37,8 +37,8 @@ class MPTConfig(PretrainedConfig):
         resid_pdrop: float = 0.0,
         emb_pdrop: float = 0.0,
         learned_pos_emb: bool = True,
-        attn_config: Optional[Dict] = None,
-        ffn_config: Optional[Dict] = None,
+        attn_config: Optional[dict] = None,
+        ffn_config: Optional[dict] = None,
         init_device: str = 'cpu',
         logit_scale: Optional[Union[float, str]] = None,
         no_bias: bool = False,
@@ -46,11 +46,11 @@ class MPTConfig(PretrainedConfig):
         norm_type: str = 'low_precision_layernorm',
         norm_eps: float = 1e-05,
         use_cache: bool = False,
-        init_config: Optional[Dict] = None,
-        fc_type: Union[str, Dict] = 'torch',
+        init_config: Optional[dict] = None,
+        fc_type: Union[str, dict] = 'torch',
         tie_word_embeddings: bool = True,
         use_pad_tok_in_ffn: bool = True,
-        block_overrides: Optional[Dict[str, Any]] = None,
+        block_overrides: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ):
         """The MPT configuration class.
@@ -95,6 +95,7 @@ class MPTConfig(PretrainedConfig):
                     type (str): Can be one of 'no_scaling', 'linear', or 'dynamic'. 'no_scaling' uses the default implementation for rotary embeddings, 'linear' uses linear scaling as proposed by the Reddit user /u/kaiokendev, and 'dynamic' uses Dynamic NTK scaling as proposed by the Reddit users /u/bloc97 and /u/emozilla.
                     factor (float): Scaling factor to use if using 'linear' or 'dynamic' as rope_scaling.type.
                 kv_n_heads (Optional[int]): For grouped_query_attention only, allow user to specify number of kv heads.
+                kv_dim (Optional[int]): For cross-attention only, allow user to specify different input dimensions for kv projections.
             ffn_config (Dict): A dictionary used to configure the model's ffn module:
                 ffn_type (str): type of ffn to use. Options: mptmlp, mptglu, te_ln_mlp
             init_device (str): The device to use for parameter initialization.
@@ -177,11 +178,6 @@ class MPTConfig(PretrainedConfig):
             init_config_defaults,
         )
 
-        if 'reuse_kv_layer_idx' in self.attn_config and self.attn_config[
-            'attn_impl'] == 'torch':
-            raise NotImplementedError(
-                'reusing kv cache from a previous layer is not implemented for torch attention.',
-            )
         if block_overrides is not None:
             self._validate_block_overrides(block_overrides)
         self.block_overrides = block_overrides
@@ -210,7 +206,7 @@ class MPTConfig(PretrainedConfig):
 
         self._validate_config()
 
-    def _validate_block_overrides(self, block_overrides: Dict[str, Any]):
+    def _validate_block_overrides(self, block_overrides: dict[str, Any]):
         warnings.warn(ExperimentalWarning('block_overrides'))
         if 'order' not in block_overrides:
             raise ValueError('`order` should be defined in block_overrides',)
@@ -218,20 +214,14 @@ class MPTConfig(PretrainedConfig):
             raise ValueError(
                 '`overrides` should be defined in block_overrides',
             )
-        for name, override in block_overrides['overrides'].items():
-            if name == 'default':
-                raise ValueError('block overrides cannot be named "default".',)
-            if 'attn_config' in override and 'reuse_kv_layer_idx' in override[
-                'attn_config'] and self.attn_config['attn_impl'] == 'torch':
-                raise NotImplementedError(
-                    'reusing kv cache from a previous layer is not implemented for torch attention.',
-                )
+        if 'default' in block_overrides['overrides'].keys():
+            raise ValueError('block overrides cannot be named "default".',)
 
     def _set_config_defaults(
         self,
-        config: Dict[str, Any],
-        config_defaults: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        config: dict[str, Any],
+        config_defaults: dict[str, Any],
+    ) -> dict[str, Any]:
         # set config defaults
         for k, v in config_defaults.items():
             if k not in config:
@@ -329,12 +319,16 @@ class MPTConfig(PretrainedConfig):
                 raise ImportError(
                     'If using the dail implementation of rope, the flash_attn library v2.0.1 or higher must be installed. Please check the instructions at https://github.com/mosaicml/llm-foundry/blob/main/TUTORIAL.md#what-kinds-of-positional-embeddings-does-llm-foundry-support',
                 )
-        if self.attn_config['sliding_window_size'] != -1 and not (
-            self.attn_config['attn_impl'] == 'flash' and
-            is_flash_v2_installed(v2_version='v2.3.0')
-        ):
+        if self.attn_config['sliding_window_size'] != -1 and self.attn_config[
+            'attn_impl'
+        ] == 'flash' and not is_flash_v2_installed(v2_version='v2.3.0',):
             raise NotImplementedError(
-                'sliding window only implemented with flash attention v2.3.0 or higher.',
+                'sliding window attention only implemented for torch attention and flash attention (v2.3.0 or higher).',
+            )
+        if self.attn_config['kv_dim'] is not None and self.attn_config[
+            'fused_qkv']:
+            raise ValueError(
+                'fused_qkv should be False when "kv_dim" is specified.',
             )
         if self.embedding_fraction > 1 or self.embedding_fraction <= 0:
             raise ValueError(
