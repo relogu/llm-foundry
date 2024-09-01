@@ -65,7 +65,7 @@ def build_evaluators(
     icl_seq_len: int,
     icl_subset_num_batches: Optional[int],
     destination_dir: Optional[str] = None,
-) -> Tuple[List[Evaluator], List[str], Optional[EvalGauntlet]]:
+) -> tuple[list[Evaluator], list[str], Optional[EvalGauntlet]]:
 
     evaluators = []
     if eval_loader_config is not None:
@@ -156,7 +156,7 @@ def build_icl_data_and_gauntlet(
     icl_seq_len: int,
     icl_subset_num_batches: Optional[int] = None,
     destination_dir: Optional[str] = None,
-) -> Tuple[List[Evaluator], List[str], Optional[EvalGauntlet]]:
+) -> tuple[list[Evaluator], list[str], Optional[EvalGauntlet]]:
     icl_evaluators, logger_keys = build_icl_evaluators(
         icl_tasks_config,
         tokenizer,
