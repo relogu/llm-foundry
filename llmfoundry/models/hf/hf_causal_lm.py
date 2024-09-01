@@ -53,6 +53,8 @@ class ComposerHFCausalLM(BaseHuggingFaceModel):
         load_in_8bit (bool, optional): Whether to load the model in 8-bit mode. Default: ``False``.
         init_device (str, optional): Which device to initialize the model on. Default: ``'cpu'``.
         use_flash_attention_2 (bool, optional): Whether to use flash-attention 2. Default: ``False``.
+        allow_embedding_resizing (bool, optional): Whether to resize the embedding of the configured
+            model to match that of the tokenizer. Default: ``False``.
         tokenizer (PreTrainedTokenizer): The tokenizer that the model will use.
     """
 
