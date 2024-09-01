@@ -44,7 +44,6 @@ class HuggingFaceModelWithFSDP(HuggingFaceModel):
         init_device: Optional[str] = None,
         peft_config: Optional['PeftConfig'] = None,
         should_save_peft_only: bool = True,
-        allow_embedding_resizing: bool = False,
     ):
         warnings.warn(
             VersionedDeprecationWarning(
@@ -62,7 +61,6 @@ class HuggingFaceModelWithFSDP(HuggingFaceModel):
             allow_embedding_resizing=allow_embedding_resizing,
             peft_config=peft_config,
             should_save_peft_only=should_save_peft_only,
-            allow_embedding_resizing=allow_embedding_resizing,
         )
 
         self.prepare_inner_model(self.model, init_device)
