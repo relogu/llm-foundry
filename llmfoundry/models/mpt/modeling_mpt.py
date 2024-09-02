@@ -1387,6 +1387,9 @@ class ComposerMPTCausalLM(HuggingFaceModel):
         additional_train_metrics = additional_train_metrics or []
 
         model = self.model_class(self.config_class(**kwargs))
+        # NOTE: Convert the mutable dictionary to an immutable one to allow for
+        # PyTorch compilation of the forward function
+        model.config.ffn_config = types.MappingProxyType(model.config.ffn_config)
 
         use_train_metrics = use_train_metrics
         train_metric_names = DEFAULT_CAUSAL_LM_TRAIN_METRICS + additional_train_metrics
