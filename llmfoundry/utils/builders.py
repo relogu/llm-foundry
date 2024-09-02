@@ -625,7 +625,7 @@ def build_icl_evaluators(
             label = f'{icl_cfg["label"]}/{num_fewshot}-shot'
             metric_names = list(icl_cfg['metric_names'])
             # TODO: fix Composer bug when copying local paths and destination exists
-            destination_path = f'{destination_dir}/{icl_cfg.label}-{num_fewshot}.jsonl'
+            destination_path = f'{destination_dir}/{icl_cfg["label"]}-{num_fewshot}.jsonl'
             # NOTE: From a preliminary investigation, it seems that MosaicML developers have not
             # been sufficiently smart to handle the potential overwrite when it comes to download
             # one of these datasets from a remote path. As such, they needed to wipe out and
