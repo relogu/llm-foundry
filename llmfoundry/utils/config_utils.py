@@ -21,6 +21,12 @@ from typing import (
 import mlflow
 from composer.loggers import Logger
 from composer.utils import dist, parse_uri
+from mlflow.data import (
+    delta_dataset_source,
+    http_dataset_source,
+    huggingface_dataset_source,
+    uc_volume_dataset_source,
+)
 from omegaconf import MISSING, DictConfig, ListConfig, MissingMandatoryValue
 from omegaconf import OmegaConf as om
 from transformers import PretrainedConfig
@@ -120,6 +126,8 @@ class TrainConfig:
     # Distributed training parameters
     dist_timeout: Union[int, float] = 600.0
     fsdp_config: Optional[dict[str, Any]] = None
+    tp_config: Optional[dict[str, Any]] = None
+    accumulate_train_batch_on_tokens: bool = True
 
     # Evaluation parameters
     eval_interval: Union[int, str] = 1
@@ -287,7 +295,6 @@ def apply_transforms_to_config(
 
     for transform in transform_functions:
         cfg = transform(cfg)
-
     return cfg
 
 
@@ -501,7 +508,11 @@ def update_batch_size_info(cfg: dict[str, Any]) -> dict[str, Any]:
     return cfg
 
 
-def process_init_device(model_cfg: dict[str, Any], fsdp_config: Optional[dict]):
+def process_init_device(
+    model_cfg: dict[str, Any],
+    fsdp_config: Optional[dict] = None,
+    tp_config: Optional[dict] = None,
+):
     # Restrict model init_device to 'meta' and 'cpu',
     # using 'cuda' vs. 'cuda:id' is tricky and can lead to common user errors
     # when multiple GPUs are available.
@@ -532,6 +543,29 @@ def process_init_device(model_cfg: dict[str, Any], fsdp_config: Optional[dict]):
 
             # Set defaults for mixed initialization
             fsdp_config.setdefault('load_monolith_rank0_only', True)
+
+    if tp_config is not None:
+        # Check tp_config has required fields
+        if 'strategy' not in tp_config or 'tensor_parallel_degree' not in tp_config:
+            raise ValueError(
+                "`tp_config` requires 'strategy' and 'tensor_parallel_degree' values. ",
+            )
+
+        # Check we are not using tensor parallelism with MoEs
+        if 'ffn_config' in model_cfg and model_cfg['ffn_config'].get(
+            'ffn_type',
+            None,
+        ) in ffns_with_megablocks:
+            raise ValueError(
+                'Tensor Parallelism is not currently supported for MoE models.',
+            )
+
+    # Check we are not using tensor parallelism with MoEs
+    if tp_config is not None and 'ffn_config' in model_cfg and model_cfg[
+        'ffn_config'].get('ffn_type', None) in ffns_with_megablocks:
+        raise ValueError(
+            'Tensor Parallelism is not currently supported for MoE models.',
+        )
 
     # Set ffn_config.device_mesh using fsdp_config
     if fsdp_config is not None and 'ffn_config' in model_cfg and model_cfg[
@@ -741,15 +775,15 @@ def log_dataset_uri(cfg: dict[str, Any]) -> None:
     data_paths = _parse_source_dataset(cfg)
 
     dataset_source_mapping = {
-        's3': mlflow.data.http_dataset_source.HTTPDatasetSource,
-        'oci': mlflow.data.http_dataset_source.HTTPDatasetSource,
-        'azure': mlflow.data.http_dataset_source.HTTPDatasetSource,
-        'gs': mlflow.data.http_dataset_source.HTTPDatasetSource,
-        'https': mlflow.data.http_dataset_source.HTTPDatasetSource,
-        'hf': mlflow.data.huggingface_dataset_source.HuggingFaceDatasetSource,
-        'delta_table': mlflow.data.delta_dataset_source.DeltaDatasetSource,
-        'uc_volume': mlflow.data.uc_volume_dataset_source.UCVolumeDatasetSource,
-        'local': mlflow.data.http_dataset_source.HTTPDatasetSource,
+        's3': http_dataset_source.HTTPDatasetSource,
+        'oci': http_dataset_source.HTTPDatasetSource,
+        'azure': http_dataset_source.HTTPDatasetSource,
+        'gs': http_dataset_source.HTTPDatasetSource,
+        'https': http_dataset_source.HTTPDatasetSource,
+        'hf': huggingface_dataset_source.HuggingFaceDatasetSource,
+        'delta_table': delta_dataset_source.DeltaDatasetSource,
+        'uc_volume': uc_volume_dataset_source.UCVolumeDatasetSource,
+        'local': http_dataset_source.HTTPDatasetSource,
     }
 
     # Map data source types to their respective MLFlow DataSource.
@@ -767,7 +801,7 @@ def log_dataset_uri(cfg: dict[str, Any]) -> None:
             log.info(
                 f'{dataset_type} unknown, defaulting to http dataset source',
             )
-            source = mlflow.data.http_dataset_source.HTTPDatasetSource(url=path)
+            source = http_dataset_source.HTTPDatasetSource(url=path)
 
         mlflow.log_input(
             mlflow.data.meta_dataset.MetaDataset(source, name=split),
