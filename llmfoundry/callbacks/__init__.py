@@ -11,6 +11,7 @@ from composer.callbacks import (
     OOMObserver,
     OptimizerMonitor,
     RuntimeEstimator,
+    NoiseScaleMonitor,
     SpeedMonitor,
     ActivationMonitor,
     SystemMetricsMonitor,
@@ -48,6 +49,7 @@ callbacks.register('memory_snapshot', func=MemorySnapshot)
 callbacks.register('speed_monitor', func=SpeedMonitor)
 callbacks.register('runtime_estimator', func=RuntimeEstimator)
 callbacks.register('optimizer_monitor', func=OptimizerMonitor)
+callbacks.register('noise_scale_monitor', func=NoiseScaleMonitor)
 callbacks.register('generate_callback', func=Generate)
 callbacks.register('early_stopper', func=EarlyStopper)
 callbacks.register('fdiff_metrics', func=FDiffMetrics)
