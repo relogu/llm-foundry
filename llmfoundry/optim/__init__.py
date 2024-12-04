@@ -4,6 +4,7 @@
 from composer.optim import (
     ConstantWithWarmupScheduler,
     CosineAnnealingWithWarmupScheduler,
+    ConstantWithCooldownWithWarmupScheduler,
     DecoupledAdamW,
     LinearWithWarmupScheduler,
 )
@@ -22,6 +23,10 @@ schedulers.register('constant_with_warmup', func=ConstantWithWarmupScheduler)
 schedulers.register(
     'cosine_with_warmup',
     func=CosineAnnealingWithWarmupScheduler,
+)
+schedulers.register(
+    'constant_with_cooldown_with_warmup',
+    func=ConstantWithCooldownWithWarmupScheduler,
 )
 schedulers.register('linear_decay_with_warmup', func=LinearWithWarmupScheduler)
 schedulers.register(
