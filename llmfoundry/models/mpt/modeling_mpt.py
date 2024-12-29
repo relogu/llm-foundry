@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import copy
 import math
+import types
 import warnings
 from functools import cached_property
 from typing import (
@@ -19,7 +20,6 @@ from typing import (
     Optional,
     Union,
 )
-import types
 
 import torch
 import torch.nn as nn
@@ -34,7 +34,8 @@ from llmfoundry.models.layers.attention import is_flash_v2_installed
 if is_flash_v2_installed():
     try:  # This try...except is needed because transformers requires it despite the 'if' statement above
         from flash_attn import bert_padding
-        from flash_attn.layers.rotary import RotaryEmbedding as DAILRotaryEmbedding
+        from flash_attn.layers.rotary import \
+            RotaryEmbedding as DAILRotaryEmbedding
     except Exception as e:
         raise e
 
@@ -143,11 +144,11 @@ def gen_rotary_embedding(
             dim=rope_head_dim,
             base=rope_theta,
             interleaved=False,
-            scale_base=rope_dail_config["xpos_scale_base"]
-            if (rope_dail_config["type"] == "xpos")
-            else None,
-            pos_idx_in_fp32=rope_dail_config["pos_idx_in_fp32"],
-            device="cpu",  # FSDP does not materialize modules with meta buffers, hence device is set to cpu
+            scale_base=rope_dail_config['xpos_scale_base'] if
+            (rope_dail_config['type'] == 'xpos') else None,
+            pos_idx_in_fp32=rope_dail_config['pos_idx_in_fp32'],
+            device=
+            'cpu',  # FSDP does not materialize modules with meta buffers, hence device is set to cpu
         )
     elif rope_impl == 'hf':
         llama_rope_config = {**rope_hf_config}
@@ -274,7 +275,9 @@ def gen_flash_attn_padding_info(
         key_padding_mask = attention_mask
         if key_padding_mask is None:
             key_padding_mask = torch.ones(
-                (bsz, past_key_len + S), dtype=torch.bool, device=device
+                (bsz, past_key_len + S),
+                dtype=torch.bool,
+                device=device,
             )
         query_padding_mask = key_padding_mask[:, -S:]
         unpadding_function = bert_padding.unpad_input
@@ -350,8 +353,8 @@ class LlamaRotaryEmbeddingFoundry(LlamaRotaryEmbedding):
 
 class MPTPreTrainedModel(PreTrainedModel):
     config_class = MPTConfig
-    base_model_prefix = "model"
-    _no_split_modules = ["MPTBlock"]
+    base_model_prefix = 'model'
+    _no_split_modules = ['MPTBlock']
 
 
 def _fsdp_wrap_fn(
@@ -365,6 +368,7 @@ def _fsdp_wrap_fn(
 
 
 class MPTModel(MPTPreTrainedModel):
+
     def __init__(self, config: MPTConfig):
         config._validate_config()
         super().__init__(config)
@@ -376,11 +380,11 @@ class MPTModel(MPTPreTrainedModel):
 
         self.learned_pos_emb = config.learned_pos_emb
 
-        if config.init_device == "mixed":
+        if config.init_device == 'mixed':
             if dist.get_local_rank() == 0:
-                config.init_device = "cpu"
+                config.init_device = 'cpu'
             else:
-                config.init_device = "meta"
+                config.init_device = 'meta'
 
         if config.norm_type.lower() not in norms.get_all():
             norm_options = ' | '.join(norms.get_all())
@@ -422,10 +426,10 @@ class MPTModel(MPTPreTrainedModel):
             device=config.init_device,
         )
 
-        self.rope = config.attn_config["rope"]
+        self.rope = config.attn_config['rope']
         self.rope_impl = None
         if self.rope:
-            self.rope_impl = config.attn_config["rope_impl"]
+            self.rope_impl = config.attn_config['rope_impl']
             self.rotary_embedding = gen_rotary_embedding(
                 rope_impl=self.rope_impl,
                 rope_theta=config.attn_config['rope_theta'],
@@ -436,7 +440,7 @@ class MPTModel(MPTPreTrainedModel):
                 n_heads=config.n_heads,
             )
 
-        if config.init_device != "meta":
+        if config.init_device != 'meta':
             log.info(
                 f'We recommend using config.init_device="meta" with Composer + FSDP for faster initialization.',
             )
@@ -687,7 +691,9 @@ class MPTModel(MPTPreTrainedModel):
             original_forward = value.forward
 
             def new_forward(
-                self, input: torch.Tensor, unembed: bool = False
+                self,  # type: ignore[reportMissingParameterType]
+                input: torch.Tensor,
+                unembed: bool = False,
             ) -> torch.Tensor:
                 if unembed:
                     return F.linear(input, self.weight)
@@ -748,7 +754,9 @@ class MPTModel(MPTPreTrainedModel):
         if attention_mask is not None:
             s_k = attention_mask.shape[-1]
             if attn_bias is None:
-                attn_bias = torch.zeros((1, 1, 1, s_k), device=device, dtype=dtype)
+                attn_bias = torch.zeros((1, 1, 1, s_k),
+                                        device=device,
+                                        dtype=dtype)
             else:
                 # clamp to 0 necessary for torch 2.0 compile()
                 _s_k = max(0, attn_bias.size(-1) - s_k)
@@ -792,7 +800,7 @@ class MPTModel(MPTPreTrainedModel):
                 'return_dict False is not implemented yet for MPT',
             )
         if output_attentions:
-            if self.attn_impl != "torch":
+            if self.attn_impl != 'torch':
                 raise NotImplementedError(
                     'output_attentions is not implemented for MPT when using attn_impl `flash`.',
                 )
@@ -833,13 +841,13 @@ class MPTModel(MPTPreTrainedModel):
             x = inputs_embeds
             input_device = inputs_embeds.device
         else:
-            raise ValueError("You must specify input_ids or inputs_embeds")
+            raise ValueError('You must specify input_ids or inputs_embeds')
 
         S = self.get_sequence_length(x)
 
         assert (
             S <= self.config.max_seq_len
-        ), f"Cannot forward input with seq_len={S}, this model only supports seq_len<={self.config.max_seq_len}"
+        ), f'Cannot forward input with seq_len={S}, this model only supports seq_len<={self.config.max_seq_len}'
 
         rotary_emb_w_meta_info = None
 
@@ -855,7 +863,7 @@ class MPTModel(MPTPreTrainedModel):
             # For attn_impl: torch, the past key tensor spec is (batch, heads, head_dim, seq).
             # Here we shift position embedding using the `seq` dim of the past key
             past_position = past_key_values[0][0].size(1)
-            if self.attn_impl == "torch":
+            if self.attn_impl == 'torch':
                 past_position = past_key_values[0][0].size(3)
 
         if self.learned_pos_emb or self.rope:
@@ -882,27 +890,25 @@ class MPTModel(MPTPreTrainedModel):
                 if attention_mask is not None:
                     # adjust the position indices to account for padding tokens
                     pos = torch.clamp(
-                        pos
-                        - torch.cumsum((~attention_mask).to(torch.int32), dim=1)[
-                            :, past_position:
-                        ],
+                        pos - torch.cumsum((~attention_mask).to(torch.int32),
+                                           dim=1)[:, past_position:,],
                         min=0,
                     )
                 if self.learned_pos_emb:
                     x = x + self.wpe(pos)
-                elif self.rope and self.rope_impl == "hf":
+                elif self.rope and self.rope_impl == 'hf':
                     rotary_emb_w_meta_info = {
-                        "impl": self.rope_impl,
-                        "rotary_emb": self.rotary_embedding,
-                        "offset_info": pos,
-                        "seq_len": S + past_position,
+                        'impl': self.rope_impl,
+                        'rotary_emb': self.rotary_embedding,
+                        'offset_info': pos,
+                        'seq_len': S + past_position,
                     }
-            elif self.rope and self.rope_impl == "dail":
+            elif self.rope and self.rope_impl == 'dail':
                 rotary_emb_w_meta_info = {
-                    "impl": self.rope_impl,
-                    "rotary_emb": self.rotary_embedding,
-                    "offset_info": past_position,
-                    "seq_len": S + past_position,
+                    'impl': self.rope_impl,
+                    'rotary_emb': self.rotary_embedding,
+                    'offset_info': past_position,
+                    'seq_len': S + past_position,
                 }
 
         if self.embedding_fraction == 1:
@@ -948,7 +954,7 @@ class MPTModel(MPTPreTrainedModel):
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
         flash_attn_padding_info = {}
-        if self.attn_impl == "flash":
+        if self.attn_impl == 'flash':
             flash_attn_padding_info = gen_flash_attn_padding_info(
                 bsz,
                 S,
@@ -1048,9 +1054,10 @@ class MPTModel(MPTPreTrainedModel):
 
 
 class MPTForCausalLM(MPTPreTrainedModel):
+
     def __init__(self, config: MPTConfig):
         super().__init__(config)
-        log.info(f"Instantiating an MPTForCausalLM model from {__file__}")
+        log.info(f'Instantiating an MPTForCausalLM model from {__file__}')
 
         self.transformer: MPTModel = self.backbone_model_class(config)
 
@@ -1076,7 +1083,7 @@ class MPTForCausalLM(MPTPreTrainedModel):
         if config.logit_scale is not None:
             logit_scale = config.logit_scale
             if isinstance(logit_scale, str):
-                if logit_scale == "inv_sqrt_d_model":
+                if logit_scale == 'inv_sqrt_d_model':
                     logit_scale = 1 / math.sqrt(config.d_model)
                 else:
                     raise ValueError(
@@ -1302,7 +1309,7 @@ class MPTForCausalLM(MPTPreTrainedModel):
 
         # if `inputs_embeds` are passed, we only want to use them in the 1st generation step
         if inputs_embeds is not None and past_key_values is None:
-            model_inputs = {"inputs_embeds": inputs_embeds}
+            model_inputs = {'inputs_embeds': inputs_embeds}
         else:
             model_inputs = {'input_ids': input_ids}
 
@@ -1370,6 +1377,7 @@ def compute_loss_from_logits(
 
 
 class ComposerMPTCausalLM(HuggingFaceModel):
+
     def __init__(
         self,
         tokenizer: Optional[PreTrainedTokenizerBase] = None,
@@ -1412,9 +1420,8 @@ class ComposerMPTCausalLM(HuggingFaceModel):
         loss_fn_config = loss_fn
         if loss_fn_config == 'fused_crossentropy':
             try:
-                from flash_attn.losses.cross_entropy import (
-                    CrossEntropyLoss as FusedCrossEntropyLoss,
-                )
+                from flash_attn.losses.cross_entropy import \
+                    CrossEntropyLoss as FusedCrossEntropyLoss
 
                 self.loss_fn = FusedCrossEntropyLoss(
                     ignore_index=-100,

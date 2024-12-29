@@ -1,14 +1,16 @@
+# Copyright 2024 MosaicML LLM Foundry authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Copyright 2022 MosaicML Composer authors & Flower Labs
 # SPDX-License-Identifier: Apache-2.0
 
 """Monitor activation values during training."""
 
 import warnings
-from typing import Any, List, Optional, Sequence, Union
-import numpy as np
- 
-import torch
+from typing import Any, Optional, Sequence, Union
 
+import numpy as np
+import torch
 from composer.core import Callback, State, Time, TimeUnit
 from composer.loggers import Logger
 from composer.loggers.wandb_logger import WandBLogger
@@ -148,7 +150,7 @@ class ActivationMonitorFullModel(Callback):
     def __init__(
         self,
         interval: Union[int, str, Time] = '25ba',
-        ignore_module_types: Optional[List[str]] = None,
+        ignore_module_types: Optional[list[str]] = None,
         only_log_wandb: bool = True,
     ):
         self.ignore_module_types = ignore_module_types
@@ -159,18 +161,22 @@ class ActivationMonitorFullModel(Callback):
         # Check that the interval timestring is parsable and convert into time object
         self.interval = Time.from_input(interval, TimeUnit.BATCH)
 
-        if self.interval.unit == TimeUnit.BATCH and self.interval < Time.from_timestring('10ba'):
+        if self.interval.unit == TimeUnit.BATCH and self.interval < Time.from_timestring(
+            '10ba',
+        ):
             warnings.warn(
                 f'Currently the ActivationMonitorFullModel`s interval is set to {self.interval} '
+                +
                 f'which is below our recommended value of 10ba. We recommend you raise '
+                +
                 f'the interval to at least 10ba, as the activation monitor adds extra overhead '
-                f'and decreases throughput.',
+                + f'and decreases throughput.',
             )
 
         # Verify that the interval has supported units
         if self.interval.unit not in [TimeUnit.BATCH, TimeUnit.EPOCH]:
             raise ValueError(
-                f'Invalid time unit for parameter interval: '
+                f'Invalid time unit for parameter interval: ' +
                 f'{self.interval.unit}',
             )
 
@@ -205,16 +211,47 @@ class ActivationMonitorFullModel(Callback):
         self.handles = []
         # Compute global statistics
         for suffix in ['_input', '_output']:
-            self.metrics[f'activations/l2_norm/full_model{suffix}'] = float(np.sqrt(self.metrics[f'activations/l2_norm/full_model{suffix}']))
-            self.metrics[f'activations/max/full_model{suffix}'] = float(np.max(self.metrics[f'activations/max/full_model{suffix}']))
+            self.metrics[f'activations/l2_norm/full_model{suffix}'] = float(
+                np.sqrt(
+                    self.metrics[f'activations/l2_norm/full_model{suffix}'],
+                ),
+            )
+            self.metrics[f'activations/max/full_model{suffix}'] = float(
+                np.max(self.metrics[f'activations/max/full_model{suffix}']),
+            )
             for metric_name in ['average', 'skewness', 'kurtosis']:
-                self.metrics[f'activations/{metric_name}/max/full_model{suffix}'] = float(np.max(self.metrics[f'activations/{metric_name}/full_model{suffix}']))
-                self.metrics[f'activations/{metric_name}/min/full_model{suffix}'] = float(np.min(self.metrics[f'activations/{metric_name}/full_model{suffix}']))
-                self.metrics[f'activations/{metric_name}/median/full_model{suffix}'] = float(np.median(self.metrics[f'activations/{metric_name}/full_model{suffix}']))
-                self.metrics.pop(f'activations/{metric_name}/full_model{suffix}')
+                self.metrics[
+                    f'activations/{metric_name}/max/full_model{suffix}'
+                ] = float(
+                    np.max(
+                        self.metrics[
+                            f'activations/{metric_name}/full_model{suffix}'],
+                    ),
+                )
+                self.metrics[
+                    f'activations/{metric_name}/min/full_model{suffix}'
+                ] = float(
+                    np.min(
+                        self.metrics[
+                            f'activations/{metric_name}/full_model{suffix}'],
+                    ),
+                )
+                self.metrics[
+                    f'activations/{metric_name}/median/full_model{suffix}'
+                ] = float(
+                    np.median(
+                        self.metrics[
+                            f'activations/{metric_name}/full_model{suffix}'],
+                    ),
+                )
+                self.metrics.pop(
+                    f'activations/{metric_name}/full_model{suffix}',
+                )
         # Log the metrics
         if self.only_log_wandb:
-            wandb_loggers = [ld for ld in logger.destinations if isinstance(ld, WandBLogger)]
+            wandb_loggers = [
+                ld for ld in logger.destinations if isinstance(ld, WandBLogger)
+            ]
             if len(wandb_loggers):
                 for wandb_logger in wandb_loggers:
                     wandb_logger.log_metrics(self.metrics, step)
@@ -249,16 +286,22 @@ class ActivationMonitorFullModel(Callback):
                 if val is None or isinstance(val, dict):
                     continue
                 if isinstance(val, str) and isinstance(input, dict):
-                    self.recursively_add_metrics('_input', input[val])  # type: ignore
+                    self.recursively_add_metrics(
+                        '_input',
+                        input[val],  # type: ignore[reportGeneralTypeIssues]
+                    )
                 else:
                     self.recursively_add_metrics('_input', val)
 
         if output is not None:
-            for val in output: 
+            for val in output:
                 if val is None or isinstance(val, dict):
                     continue
                 if isinstance(val, str) and isinstance(output, dict):
-                    self.recursively_add_metrics('_output', output[val])  # type: ignore
+                    self.recursively_add_metrics(
+                        '_output',
+                        output[val],  # type: ignore[reportGeneralTypeIssues]
+                    )
                 else:
                     self.recursively_add_metrics('_output', val)
 
@@ -281,24 +324,34 @@ class ActivationMonitorFullModel(Callback):
         if value.is_floating_point() or value.is_complex():
             if f'activations/l2_norm/full_model{suffix}' not in self.metrics:
                 self.metrics[f'activations/l2_norm/full_model{suffix}'] = .0
-            self.metrics[f'activations/l2_norm/full_model{suffix}'] += float((value.detach() ** 2).sum().item())
-            
+            self.metrics[f'activations/l2_norm/full_model{suffix}'] += float(
+                (value.detach()**2).sum().item(),
+            )
+
             if f'activations/average/full_model{suffix}' not in self.metrics:
                 self.metrics[f'activations/average/full_model{suffix}'] = []
-            self.metrics[f'activations/average/full_model{suffix}'].append(float(value.detach().mean().item()))
-            
+            self.metrics[f'activations/average/full_model{suffix}'].append(
+                float(value.detach().mean().item()),
+            )
+
             if f'activations/skewness/full_model{suffix}' not in self.metrics:
                 self.metrics[f'activations/skewness/full_model{suffix}'] = []
-            self.metrics[f'activations/skewness/full_model{suffix}'].append(float(compute_skewness(value.detach()).item()))
-            
+            self.metrics[f'activations/skewness/full_model{suffix}'].append(
+                float(compute_skewness(value.detach()).item()),
+            )
+
             if f'activations/kurtosis/full_model{suffix}' not in self.metrics:
                 self.metrics[f'activations/kurtosis/full_model{suffix}'] = []
-            self.metrics[f'activations/kurtosis/full_model{suffix}'].append(float(compute_kurtosis(value.detach()).item()))
-            
+            self.metrics[f'activations/kurtosis/full_model{suffix}'].append(
+                float(compute_kurtosis(value.detach()).item()),
+            )
+
             # Because we call max with `dim=-1` we need to call .values to get the actual values
             if f'activations/max/full_model{suffix}' not in self.metrics:
                 self.metrics[f'activations/max/full_model{suffix}'] = []
-            self.metrics[f'activations/max/full_model{suffix}'].append(float(value.detach().max(dim=-1).values.mean().item()))
+            self.metrics[f'activations/max/full_model{suffix}'].append(
+                float(value.detach().max(dim=-1).values.mean().item()),
+            )
 
     def create_module_names(self, model: torch.nn.Module):
         self.module_names = {m: name for name, m in model.named_modules()}
