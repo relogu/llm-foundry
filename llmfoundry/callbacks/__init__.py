@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from composer.callbacks import (
+    ActivationMonitor,
     EarlyStopper,
+    EarlyStopperWithTarget,
     Generate,
     LRMonitor,
     MemoryMonitor,
@@ -12,10 +14,11 @@ from composer.callbacks import (
     OptimizerMonitor,
     RuntimeEstimator,
     SpeedMonitor,
-    ActivationMonitor,
     SystemMetricsMonitor,
 )
 
+from llmfoundry.callbacks.activation_monitor_full_model import \
+    ActivationMonitorFullModel
 from llmfoundry.callbacks.async_eval_callback import AsyncEval
 from llmfoundry.callbacks.curriculum_learning_callback import CurriculumLearning
 from llmfoundry.callbacks.env_logging_callback import EnvironmentLoggingCallback
@@ -38,7 +41,6 @@ from llmfoundry.callbacks.resumption_callbacks import (
 )
 from llmfoundry.callbacks.run_timeout_callback import RunTimeoutCallback
 from llmfoundry.callbacks.scheduled_gc_callback import ScheduledGarbageCollector
-from llmfoundry.callbacks.activation_monitor_full_model import ActivationMonitorFullModel
 from llmfoundry.registry import callbacks, callbacks_with_config
 
 callbacks.register('system_metrics_monitor', func=SystemMetricsMonitor)
@@ -50,6 +52,7 @@ callbacks.register('runtime_estimator', func=RuntimeEstimator)
 callbacks.register('optimizer_monitor', func=OptimizerMonitor)
 callbacks.register('generate_callback', func=Generate)
 callbacks.register('early_stopper', func=EarlyStopper)
+callbacks.register('early_stopper_with_target', func=EarlyStopperWithTarget)
 callbacks.register('fdiff_metrics', func=FDiffMetrics)
 callbacks.register('hf_checkpointer', func=HuggingFaceCheckpointer)
 callbacks.register('global_lr_scaling', func=GlobalLRScaling)
@@ -60,7 +63,10 @@ callbacks.register('oom_observer', func=OOMObserver)
 callbacks.register('eval_output_logging', func=EvalOutputLogging)
 callbacks.register('mbmoe_tok_per_expert', func=MegaBlocksMoE_TokPerExpert)
 # Add our custom full model activation monitor
-callbacks.register('activation_monitor_full_model', func=ActivationMonitorFullModel)
+callbacks.register(
+    'activation_monitor_full_model',
+    func=ActivationMonitorFullModel,
+)
 callbacks.register('activation_monitor', func=ActivationMonitor)
 callbacks.register('run_timeout', func=RunTimeoutCallback)
 callbacks.register('loss_perp_v_len', func=LossPerpVsContextLengthLogger)
