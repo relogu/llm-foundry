@@ -3,6 +3,7 @@
 
 from composer.callbacks import (
     EarlyStopper,
+    EarlyStopperWithTarget,
     Generate,
     LRMonitor,
     MemoryMonitor,
@@ -50,6 +51,7 @@ callbacks.register('runtime_estimator', func=RuntimeEstimator)
 callbacks.register('optimizer_monitor', func=OptimizerMonitor)
 callbacks.register('generate_callback', func=Generate)
 callbacks.register('early_stopper', func=EarlyStopper)
+callbacks.register('early_stopper_with_target', func=EarlyStopperWithTarget)
 callbacks.register('fdiff_metrics', func=FDiffMetrics)
 callbacks.register('hf_checkpointer', func=HuggingFaceCheckpointer)
 callbacks.register('global_lr_scaling', func=GlobalLRScaling)
