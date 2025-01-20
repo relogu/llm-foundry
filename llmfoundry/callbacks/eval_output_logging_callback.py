@@ -150,9 +150,9 @@ class EvalOutputLogging(Callback):
         for dest_logger in logger.destinations:
             if not isinstance(dest_logger, ConsoleLogger):
                 dest_logger.log_table(
-                    self.columns,
+                    self.columns,  # type: ignore[reportGeneralTypeIssues]
                     rows,
-                    name=self.name,
+                    name=self.name,  # type: ignore[reportGeneralTypeIssues]
                     step=state.timestamp.batch.value,
                 )
 
