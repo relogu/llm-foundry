@@ -1,6 +1,10 @@
 # Copyright 2022 MosaicML LLM Foundry authors
 # SPDX-License-Identifier: Apache-2.0
 
+from composer.optim import \
+    ConstantWithLinearCooldownWithWarmupScheduler  # type: ignore[reportGeneralTypeIssues]
+from composer.optim import \
+    ConstantWithSqrtCooldownWithWarmupScheduler  # type: ignore[reportGeneralTypeIssues]
 from composer.optim import (
     ConstantWithWarmupScheduler,
     CosineAnnealingWithWarmupScheduler,
@@ -24,6 +28,14 @@ schedulers.register('constant_with_warmup', func=ConstantWithWarmupScheduler)
 schedulers.register(
     'cosine_with_warmup',
     func=CosineAnnealingWithWarmupScheduler,
+)
+schedulers.register(
+    'constant_with_linear_cooldown_with_warmup',
+    func=ConstantWithLinearCooldownWithWarmupScheduler,
+)
+schedulers.register(
+    'constant_with_sqrt_cooldown_with_warmup',
+    func=ConstantWithSqrtCooldownWithWarmupScheduler,
 )
 schedulers.register('linear_decay_with_warmup', func=LinearWithWarmupScheduler)
 schedulers.register(

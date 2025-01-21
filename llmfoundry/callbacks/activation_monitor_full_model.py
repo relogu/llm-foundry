@@ -165,16 +165,18 @@ class ActivationMonitorFullModel(Callback):
             '10ba',
         ):
             warnings.warn(
-                f'Currently the ActivationMonitorFullModel`s interval is set to {self.interval} ' + \
-                f'which is below our recommended value of 10ba. We recommend you raise ' + \
-                f'the interval to at least 10ba, as the activation monitor adds extra overhead ' + \
-                f'and decreases throughput.',
+                f'Currently the ActivationMonitorFullModel`s interval is set to {self.interval} '
+                +
+                f'which is below our recommended value of 10ba. We recommend you raise '
+                +
+                f'the interval to at least 10ba, as the activation monitor adds extra overhead '
+                + f'and decreases throughput.',
             )
 
         # Verify that the interval has supported units
         if self.interval.unit not in [TimeUnit.BATCH, TimeUnit.EPOCH]:
             raise ValueError(
-                f'Invalid time unit for parameter interval: ' + \
+                f'Invalid time unit for parameter interval: ' +
                 f'{self.interval.unit}',
             )
 
