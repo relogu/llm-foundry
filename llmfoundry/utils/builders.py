@@ -62,6 +62,7 @@ def build_evaluators(
     device_eval_batch_size: Union[int, float],
     icl_seq_len: int,
     icl_subset_num_batches: Optional[int],
+    device_eval_microbatch_size: Optional[Union[int, str, float]] = None,
     destination_dir: Optional[str] = None,
 ) -> tuple[list[Evaluator], list[str], Optional[EvalGauntlet]]:
 
@@ -71,6 +72,7 @@ def build_evaluators(
             eval_loader_config,
             tokenizer,
             device_eval_batch_size,
+            device_eval_microbatch_size=device_eval_microbatch_size,
         )
 
     logger_keys = []
@@ -81,13 +83,14 @@ def build_evaluators(
                 'device_eval_batch_size should be an int for icl tasks.',
             )
         icl_evaluators, logger_keys, eval_gauntlet_callback = build_icl_data_and_gauntlet(
-            icl_tasks_config,
-            eval_gauntlet_config,
-            tokenizer,
-            device_eval_batch_size,
-            icl_seq_len,
-            icl_subset_num_batches,
+            icl_tasks_config=icl_tasks_config,
+            eval_gauntlet_config=eval_gauntlet_config,
+            tokenizer=tokenizer,
+            device_eval_batch_size=device_eval_batch_size,
+            icl_seq_len=icl_seq_len,
+            icl_subset_num_batches=icl_subset_num_batches,
             destination_dir=destination_dir,
+            device_eval_microbatch_size=device_eval_microbatch_size,
         )
         evaluators.extend(icl_evaluators)
 
@@ -98,6 +101,7 @@ def build_eval_loaders(
     eval_loader_config: Union[dict[str, Any], list[dict[str, Any]]],
     tokenizer: PreTrainedTokenizerBase,
     device_eval_batch_size: Union[int, float],
+    device_eval_microbatch_size: Optional[Union[int, str, float]] = None,
 ) -> list[Evaluator]:
     evaluators: list[Evaluator] = []
     if isinstance(eval_loader_config, list):
@@ -124,7 +128,7 @@ def build_eval_loaders(
             # Load the eval data to fail fast. metrics will get added
             # later in add_metrics_to_eval_loaders, after the model is loaded
             metric_names=[],
-            device_eval_microbatch_size=device_eval_batch_size,
+            device_eval_microbatch_size=device_eval_microbatch_size,
         )
         evaluators.append(eval_loader)
     return evaluators
@@ -152,6 +156,7 @@ def build_icl_data_and_gauntlet(
     tokenizer: PreTrainedTokenizerBase,
     device_eval_batch_size: int,
     icl_seq_len: int,
+    device_eval_microbatch_size: Optional[Union[int, str, float]] = None,
     icl_subset_num_batches: Optional[int] = None,
     destination_dir: Optional[str] = None,
 ) -> tuple[list[Evaluator], list[str], Optional[EvalGauntlet]]:
@@ -162,6 +167,7 @@ def build_icl_data_and_gauntlet(
         device_eval_batch_size,
         icl_subset_num_batches=icl_subset_num_batches,
         destination_dir=destination_dir,
+        device_eval_microbatch_size=device_eval_microbatch_size,
     )
     eval_gauntlet_cb = None
     if eval_gauntlet_config is not None:
@@ -555,6 +561,7 @@ def build_icl_evaluators(
     default_batch_size: int,
     destination_dir: Optional[str] = None,
     icl_subset_num_batches: Optional[int] = None,
+    device_eval_microbatch_size: Optional[Union[int, str, float]] = None,
 ) -> tuple[list[Evaluator], list[str]]:
     if destination_dir is None:
         destination_dir = os.getcwd()
@@ -704,6 +711,7 @@ def build_icl_evaluators(
                         dataloader=dataloaders,
                         metric_names=metric_names,
                         subset_num_batches=icl_subset_num_batches,
+                        device_eval_microbatch_size=device_eval_microbatch_size,
                     ),
                 )
 
