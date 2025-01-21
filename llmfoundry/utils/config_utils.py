@@ -178,6 +178,7 @@ class TrainConfig:
 
     # Eval dataloader
     eval_subset_num_batches: int = -1
+    device_eval_microbatch_size: Union[str, int, float] = 'auto'
     eval_first: bool = False
     compile_config: Optional[dict[str, Any]] = None
 
