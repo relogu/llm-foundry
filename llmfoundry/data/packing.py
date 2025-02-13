@@ -10,6 +10,8 @@ import torch
 from composer.utils import dist
 from transformers import PreTrainedTokenizerBase
 
+from llmfoundry.utils.consts import CROSS_ENTROPY_IGNORE_INDEX
+
 log = logging.getLogger(__name__)
 
 __all__ = [
@@ -152,7 +154,7 @@ class BinPackCollator:
 
         pad_vals = {
             'input_ids': self.pad_token_id,
-            'labels': -100,
+            'labels': CROSS_ENTROPY_IGNORE_INDEX,
             'attention_mask': 0,
             'sequence_id': -1,
         }
@@ -317,7 +319,7 @@ def _combine_in_place(
     if 'labels' in add_on:
         # Prevents the last token in example from being trained to
         # predict the first token in add_on, which would make no sense.
-        add_on['labels'][0] = -100
+        add_on['labels'][0] = CROSS_ENTROPY_IGNORE_INDEX
 
     for k in example.keys():
         if k == 'sequence_id':
@@ -472,7 +474,9 @@ def profile_packing(
 
     # If streaming dataset, use a temporary local folder for profiling
     local_rank_zero = dist.get_global_rank() - dist.get_local_rank()
-    if dataset_cfg.get('remote') is not None:
+    if dataset_cfg.get(
+        'remote',
+    ) is not None and dataset_cfg.get('local') is None:
         tmp_path_to_broadcast = tempfile.TemporaryDirectory().name
         gathered_paths = dist.all_gather_object(tmp_path_to_broadcast)
         tmp_path = gathered_paths[local_rank_zero]
@@ -483,7 +487,8 @@ def profile_packing(
             tmp_path_to_broadcast = tempfile.TemporaryDirectory().name
             gathered_paths = dist.all_gather_object(tmp_path_to_broadcast)
             tmp_path = gathered_paths[local_rank_zero]
-            stream_config['local'] = tmp_path
+            if stream_config.get('local') is None:
+                stream_config['local'] = tmp_path
 
     # Determine the packing_ratio values we'll try
     packing_ratios, raw_batch_sizes = [], []
@@ -512,6 +517,10 @@ def profile_packing(
     big_batch = next(iter(train_dataloader))
 
     # Cut everything down to size
+    if 'total_tokens' in big_batch:
+        del big_batch['total_tokens']
+    if 'loss_generating_tokens' in big_batch:
+        del big_batch['loss_generating_tokens']
     sizes, trimmed_examples = _trim_batch(big_batch)
 
     def profile(raw_batch_size: int) -> tuple[Optional[float], Optional[float]]:

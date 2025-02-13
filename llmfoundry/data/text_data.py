@@ -23,7 +23,7 @@ from torch.utils.data import DataLoader
 from transformers import PreTrainedTokenizerBase
 
 from llmfoundry import registry
-from llmfoundry.data import (
+from llmfoundry.data.data import (
     SUPPORTED_MDS_ENCODING_TYPES,
     stream_remote_local_validate,
 )
@@ -105,6 +105,9 @@ class StreamingTextDataset(StreamingDataset):
         replication (int, optional): Determines how many consecutive devices will receive the same
             samples. Useful for training with tensor or sequence parallelism, where multiple
             devices need to see the same partition of the dataset. Defaults to ``None``.
+        stream_name (str): The name of the Stream to use which is registered in
+            streaming.base.stream.streams_registry. Defaults to ``stream``.
+        stream_config (dict[str, Any]): Additional arguments to pass to the Stream constructor.
     """
 
     def __init__(
@@ -135,13 +138,10 @@ class StreamingTextDataset(StreamingDataset):
         batching_method: str = 'random',
         allow_unsafe_types: bool = False,
         replication: Optional[int] = None,
+        stream_name: str = 'stream',
+        stream_config: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ):
-
-        if len(kwargs) > 0:
-            raise ValueError(
-                f'StreamingTextDataset() got an unexpected keyword argument: {kwargs}',
-            )
 
         if token_encoding_type not in SUPPORTED_MDS_ENCODING_TYPES:
             raise ValueError(
@@ -188,6 +188,9 @@ class StreamingTextDataset(StreamingDataset):
             batching_method=batching_method,
             allow_unsafe_types=allow_unsafe_types,
             replication=replication,
+            stream_name=stream_name,
+            stream_config=stream_config,
+            **kwargs,
         )
         self.tokenizer = tokenizer
         self.max_seq_len = max_seq_len
@@ -332,10 +335,13 @@ def build_text_dataloader(
         StreamingTextDataset,
     ).parameters
 
+    valid_base_dataset_params = inspect.signature(StreamingDataset,).parameters
+
     dataset_config_subset_for_streaming_text_dataset = {
         k: v
         for k, v in dataset_cfg.items()
-        if k in valid_streaming_text_dataset_parameters
+        if k in valid_streaming_text_dataset_parameters or
+        k in valid_base_dataset_params
     }
 
     # build dataset potentially with streams

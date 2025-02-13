@@ -1,6 +1,10 @@
 # Copyright 2022 MosaicML LLM Foundry authors
 # SPDX-License-Identifier: Apache-2.0
 
+from composer.callbacks import \
+    LoadCheckpoint  # type: ignore[reportGeneralTypeIssues]
+from composer.callbacks import \
+    NoiseScaleMonitor  # type: ignore[reportGeneralTypeIssues]
 from composer.callbacks import (
     ActivationMonitor,
     EarlyStopper,
@@ -9,7 +13,6 @@ from composer.callbacks import (
     MemoryMonitor,
     MemorySnapshot,
     NaNMonitor,
-    NoiseScaleMonitor,
     OOMObserver,
     OptimizerMonitor,
     RuntimeEstimator,
@@ -21,6 +24,7 @@ from llmfoundry.callbacks.activation_monitor_full_model import \
     ActivationMonitorFullModel
 from llmfoundry.callbacks.async_eval_callback import AsyncEval
 from llmfoundry.callbacks.curriculum_learning_callback import CurriculumLearning
+from llmfoundry.callbacks.dataset_swap_callback import DatasetSwap
 from llmfoundry.callbacks.env_logging_callback import EnvironmentLoggingCallback
 from llmfoundry.callbacks.eval_gauntlet_callback import EvalGauntlet
 from llmfoundry.callbacks.eval_output_logging_callback import EvalOutputLogging
@@ -73,9 +77,11 @@ callbacks.register('loss_perp_v_len', func=LossPerpVsContextLengthLogger)
 callbacks.register('env_logging', func=EnvironmentLoggingCallback)
 callbacks.register('nan_monitor', func=NaNMonitor)
 callbacks.register('kill_loss_spike', func=KillLossSpike)
+callbacks.register('load_checkpoint', func=LoadCheckpoint)
 
 callbacks_with_config.register('async_eval', func=AsyncEval)
 callbacks_with_config.register('curriculum_learning', func=CurriculumLearning)
+callbacks_with_config.register('dataset_swap', func=DatasetSwap)
 
 __all__ = [
     'FDiffMetrics',
