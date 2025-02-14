@@ -2,12 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from composer.callbacks import \
+    LoadCheckpoint  # type: ignore[reportGeneralTypeIssues]
+from composer.callbacks import \
     NoiseScaleMonitor  # type: ignore[reportGeneralTypeIssues]
 from composer.callbacks import (
     ActivationMonitor,
     EarlyStopper,
     Generate,
-    LoadCheckpoint,
     LRMonitor,
     MemoryMonitor,
     MemorySnapshot,
