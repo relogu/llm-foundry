@@ -80,8 +80,6 @@ from llmfoundry.models.utils.param_init_fns import generic_param_init_fn_  # typ
 from llmfoundry.models.layers.norm import LPLayerNorm  # type: ignore
 # isort: on
 
-from llmfoundry.utils.warnings import VersionedDeprecationWarning
-
 log = logging.getLogger(__name__)
 
 CROSS_ENTROPY_IGNORE_INDEX = -100
@@ -294,15 +292,15 @@ def gen_flash_attn_padding_info(
         query_padding_mask = attention_mask_in_length
         unpadding_function = bert_padding.unpad_input_for_concatenated_sequences
 
-    _, indices_q, cu_seqlens_q, max_seqlen_q = unpadding_function(
+    _, indices_q, cu_seqlens_q, max_seqlen_q, *_ = unpadding_function(
         torch.empty(bsz, S, 1, device=device),
         query_padding_mask,
     )
-    _, indices_k, cu_seqlens_k, max_seqlen_k = unpadding_function(
+    _, indices_k, cu_seqlens_k, max_seqlen_k, *_ = unpadding_function(
         torch.empty(bsz, past_key_len + S, 1, device=device),
         key_padding_mask,
     )
-    _, indices_v, _, _ = unpadding_function(
+    _, indices_v, *_ = unpadding_function(
         torch.empty(bsz, past_key_len + S, 1, device=device),
         key_padding_mask,
     )
@@ -371,7 +369,7 @@ def _fsdp_wrap_fn(
 ) -> bool:
     # FSDP Wrap function for MPT Models
     if hasattr(module, '_fsdp_kwargs_dict'):
-        return module._fsdp_kwargs_dict
+        return module._fsdp_kwargs_dict  # type: ignore
     return isinstance(module, MPTBlock)
 
 
@@ -975,14 +973,14 @@ class MPTModel(MPTPreTrainedModel):
 
         layer_kv_cache_dict = {}
         for b_idx, block in enumerate(self.blocks):
-            attn_block = block.norm_attn_norm.attn if self.blocks_fuse_norm_attn_norm else block.attn
-            if attn_block.reuse_kv_layer_idx is not None:
-                if attn_block.reuse_kv_layer_idx not in layer_kv_cache_dict:
+            attn_block = block.norm_attn_norm.attn if self.blocks_fuse_norm_attn_norm else block.attn  # type: ignore
+            if attn_block.reuse_kv_layer_idx is not None:  # type: ignore
+                if attn_block.reuse_kv_layer_idx not in layer_kv_cache_dict:  # type: ignore
                     raise KeyError(
-                        f'kv cache for layer {block.reuse_kv_layer_idx} not found in {layer_kv_cache_dict=}.',
+                        f'kv cache for layer {block.reuse_kv_layer_idx} not found in {layer_kv_cache_dict=}.',  # type: ignore
                     )
                 prev_layer_key_value = layer_kv_cache_dict[
-                    attn_block.reuse_kv_layer_idx]
+                    attn_block.reuse_kv_layer_idx]  # type: ignore
             else:
                 prev_layer_key_value = None
             if output_hidden_states:
@@ -1284,12 +1282,12 @@ class MPTForCausalLM(MPTPreTrainedModel):
         act_ckpt_mod_to_blocks = build_act_ckpt_mod_to_blocks(
             act_ckpt_target,
             MPTBlock,
-            module.max_block_idx,
+            module.max_block_idx,  # type: ignore
         )
 
         check_mapping_blocks_overlap(
             act_ckpt_mod_to_blocks,
-            module.max_block_idx,
+            module.max_block_idx,  # type: ignore
         )
 
         for k in act_ckpt_mod_to_blocks.keys():
@@ -1368,7 +1366,6 @@ def compute_loss_from_logits(
     shift_labels: bool,
     labels: torch.Tensor,
     loss_fn: nn.Module,
-    sample_weighing_factor: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     targets = get_targets(labels) if shift_labels else labels
 
@@ -1377,22 +1374,11 @@ def compute_loss_from_logits(
         targets.view(-1),
     )
 
-    if torch.all(targets == loss_fn.ignore_index):
+    if torch.all(targets == loss_fn.ignore_index):  # type: ignore
         loss = losses.sum()
     else:
-        loss = losses.sum() / (targets != loss_fn.ignore_index).sum()
-        if sample_weighing_factor is not None:
-            warnings.warn(
-                VersionedDeprecationWarning(
-                    message='sample_weighing_factor has been deprecated!',
-                    remove_version='0.17.0',
-                ),
-            )
-            if sample_weighing_factor.shape[0] > 1:
-                raise ValueError(
-                    'Sample weighing factor is not supported when batch["sample_weighing_factor"].shape[0] > 1.',
-                )
-            loss = loss * sample_weighing_factor[0].item()
+        loss = losses.sum() / (targets !=
+                               loss_fn.ignore_index).sum()  # type: ignore
 
     return loss
 
@@ -1502,7 +1488,6 @@ class ComposerMPTCausalLM(HuggingFaceModel):
             self.shift_labels,
             batch['labels'],
             self.loss_fn,
-            batch.get('sample_weighing_factor', None),
         )
 
         if self.config.ffn_config['ffn_type'] in ffns_with_megablocks:

@@ -348,10 +348,13 @@ def moe_init(
     if megablocks is not None and isinstance(
         module,
         (
-            megablocks.layers.moe.MoE,
-            megablocks.layers.dmoe.dMoE,
-            megablocks.layers.moe.ParallelMLP,
-            megablocks.layers.dmoe.ParallelDroplessMLP,
+            megablocks.layers.moe.MoE,  # type: ignore[reportGeneralTypeIssues]
+            megablocks.layers.dmoe.  # type: ignore[reportGeneralTypeIssues]
+            dMoE,
+            megablocks.layers.moe.  # type: ignore[reportGeneralTypeIssues]
+            ParallelMLP,
+            megablocks.layers.dmoe.  # type: ignore[reportGeneralTypeIssues]
+            ParallelDroplessMLP,
         ),
     ):
         if hasattr(module, 'bias') and module.bias is not None:
@@ -360,7 +363,8 @@ def moe_init(
         return True
     elif megablocks is not None and isinstance(
         module,
-        megablocks.layers.glu.SparseGLU,
+        megablocks.layers.glu.  # type: ignore[reportGeneralTypeIssues]
+        SparseGLU,
     ):
         _megablocks_sparse_glu_generic_param_init_fn_(
             module,
@@ -371,7 +375,8 @@ def moe_init(
         return True
     elif megablocks is not None and isinstance(
         module,
-        megablocks.layers.mlp.SparseMLP,
+        megablocks.layers.mlp.  # type: ignore[reportGeneralTypeIssues]
+        SparseMLP,
     ):
         _megablocks_sparse_mlp_generic_param_init_fn_(
             module,
@@ -382,7 +387,7 @@ def moe_init(
         return True
     elif megablocks is not None and isinstance(
         module,
-        megablocks.layers.mlp.MLP,
+        megablocks.layers.mlp.MLP,  # type: ignore[reportGeneralTypeIssues]
     ):
         _megablocks_mlp_generic_param_init_fn_(
             module,
@@ -490,8 +495,8 @@ def _megablocks_sparse_mlp_generic_param_init_fn_(
     expert_process_group_size, rank = 1, 0
     if module.expert_parallel_group is not None:
         expert_process_group_size = int(
-            module.expert_parallel_group.size(),
-        )  # type: ignore
+            module.expert_parallel_group.size(),  # type: ignore
+        )
         rank = int(module.expert_parallel_group.rank())  # type: ignore
 
     hidden_size = int(module.hidden_size)  # type: ignore
@@ -560,8 +565,8 @@ def _megablocks_sparse_glu_generic_param_init_fn_(
     expert_process_group_size, rank = 1, 0
     if module.expert_parallel_group is not None:
         expert_process_group_size = int(
-            module.expert_parallel_group.size(),
-        )  # type: ignore
+            module.expert_parallel_group.size(),  # type: ignore
+        )
         rank = int(module.expert_parallel_group.rank())  # type: ignore
 
     hidden_size = int(module.hidden_size)  # type: ignore
@@ -606,8 +611,8 @@ def _megablocks_mlp_generic_param_init_fn_(
     expert_process_group_size, rank = 1, 0
     if module.expert_parallel_group is not None:
         expert_process_group_size = int(
-            module.expert_parallel_group.size(),
-        )  # type: ignore
+            module.expert_parallel_group.size(),  # type: ignore
+        )
         rank = int(module.expert_parallel_group.rank())  # type: ignore
 
     _init_fn_ = _flip_fan_mode(init_fn_)

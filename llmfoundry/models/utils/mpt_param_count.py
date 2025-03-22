@@ -66,7 +66,12 @@ def megablocks_n_total_params(mpt_model) -> int:  # type: ignore
     for module in mpt_model.modules():
         if isinstance(
             module,
-            (megablocks.layers.mlp.SparseMLP, megablocks.layers.mlp.MLP),
+            (
+                megablocks.layers.mlp.  # type: ignore[reportGeneralTypeIssues]
+                SparseMLP,
+                megablocks.layers.mlp.  # type: ignore[reportGeneralTypeIssues]
+                MLP,
+            ),
         ):
             n_w1 = _dtensor_safe_check_numel(module.w1)
             n_total_params += n_w1 * moe_world_size
@@ -108,7 +113,12 @@ def megablocks_n_active_params(mpt_model) -> int:  # type: ignore
     for module in mpt_model.modules():
         if isinstance(
             module,
-            (megablocks.layers.mlp.SparseMLP, megablocks.layers.mlp.MLP),
+            (
+                megablocks.layers.mlp.  # type: ignore[reportGeneralTypeIssues]
+                SparseMLP,
+                megablocks.layers.mlp.  # type: ignore[reportGeneralTypeIssues]
+                MLP,
+            ),
         ):
             n_w1 = _dtensor_safe_check_numel(module.w1)
             n_active_params += int(n_w1 / local_experts * moe_top_k)

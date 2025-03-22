@@ -187,14 +187,15 @@ def config_megablocks_moe_args(
     ffn_config.setdefault('ffn_hidden_size', ffn_hidden_size)
 
     args_to_keep_in_ffn_config = inspect.signature(
-        megablocks.layers.arguments.Arguments,
+        megablocks.layers.arguments.  # type: ignore[reportGeneralTypeIssues]
+        Arguments,
     ).parameters
 
     ffn_config = {
         k: v for k, v in ffn_config.items() if k in args_to_keep_in_ffn_config
     }
 
-    args = megablocks.layers.arguments.Arguments(
+    args = megablocks.layers.arguments.Arguments(  # type: ignore[reportGeneralTypeIssues]
         hidden_size=d_model,
         **ffn_config,
     )
