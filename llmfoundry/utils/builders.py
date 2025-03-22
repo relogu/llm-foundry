@@ -23,7 +23,11 @@ from torch.distributed.checkpoint import LoadPlanner, SavePlanner
 from torch.distributed.tensor.parallel.style import ParallelStyle
 from torch.optim.optimizer import Optimizer
 from torchmetrics import Metric
-from transformers import AutoTokenizer, PreTrainedTokenizerBase
+from transformers import (
+    AutoTokenizer,
+    PreTrainedTokenizerBase,
+    PreTrainedTokenizerFast,
+)
 
 from llmfoundry import registry
 from llmfoundry.callbacks import EvalGauntlet
@@ -500,7 +504,7 @@ def build_scheduler(
 def build_tokenizer(
     tokenizer_name: str,
     tokenizer_kwargs: dict[str, Any],
-) -> PreTrainedTokenizerBase:
+) -> PreTrainedTokenizerBase | PreTrainedTokenizerFast:
     os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = '1'
     os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 

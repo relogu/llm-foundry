@@ -1321,8 +1321,8 @@ def test_token_counting_func_dataloader_setting(
         raise NotImplementedError()
 
     batch_collated = dl.dataloader.collate_fn(batch_tokenized)  # type: ignore
-    actual_total_token_count = dl.get_num_tokens_in_batch(batch_collated, token_type='total')
-    actual_loss_generating_token_count = dl.get_num_tokens_in_batch(batch_collated, token_type='loss_generating')
+    actual_total_token_count = dl.get_num_tokens_in_batch(batch_collated)
+    actual_loss_generating_token_count = dl.get_num_tokens_in_batch(batch_collated)
 
     assert actual_total_token_count == expected_token_count
     assert actual_loss_generating_token_count == expected_loss_generating_token_count

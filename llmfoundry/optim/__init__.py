@@ -1,6 +1,7 @@
 # Copyright 2022 MosaicML LLM Foundry authors
 # SPDX-License-Identifier: Apache-2.0
 
+from composer.optim import ADOPT  # type: ignore[reportGeneralTypeIssues]
 from composer.optim import \
     ConstantWithLinearCooldownWithWarmupScheduler  # type: ignore[reportGeneralTypeIssues]
 from composer.optim import \
@@ -18,6 +19,7 @@ from llmfoundry.optim.no_op import NoOp
 from llmfoundry.optim.scheduler import InverseSquareRootWithWarmupScheduler
 from llmfoundry.registry import optimizers, schedulers
 
+optimizers.register('adopt', func=ADOPT)
 optimizers.register('adalr_lion', func=DecoupledAdaLRLion)
 optimizers.register('clip_lion', func=DecoupledClipLion)
 optimizers.register('decoupled_lionw', func=DecoupledLionW)

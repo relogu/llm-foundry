@@ -15,7 +15,6 @@ from llmfoundry.data.finetuning.collator import Seq2SeqFinetuningCollator
 from llmfoundry.data.finetuning.dataloader import build_collate_fn
 from llmfoundry.data.packing import BinPackCollator
 from llmfoundry.data.text_data import ConcatenatedSequenceCollatorWrapper
-from llmfoundry.utils.consts import CROSS_ENTROPY_IGNORE_INDEX
 
 log = logging.getLogger(__name__)
 
@@ -133,7 +132,7 @@ def get_data_spec(
 
 def get_tokens_per_batch_func(
     decoder_only: bool = True,
-) -> Callable[[Batch], Union[int, dict[str, int]]]:
+) -> Callable[[Batch], int]:
     """Returns a callable that counts the number of tokens in a batch.
 
     Args:
@@ -145,7 +144,7 @@ def get_tokens_per_batch_func(
         Callable[[Batch], int]: A callable that counts the number of tokens in a batch.
     """
 
-    def get_num_tokens_in_batch(batch: Batch) -> Union[int, dict[str, int]]:
+    def get_num_tokens_in_batch(batch: Batch) -> int:
         if not isinstance(batch, Mapping) or (
             'attention_mask' not in batch and 'input_ids' not in batch
         ):
@@ -158,26 +157,11 @@ def get_tokens_per_batch_func(
                 'get_tokens_per_batch_func() for encoder decoder requires a batch with a decoder_attention_mask key',
             )
 
-        # Short cut if the dataloader has already calculated the number of tokens
-        if 'total_tokens' in batch and 'loss_generating_tokens' in batch:
-            return {
-                'total': sum(batch['total_tokens']),
-                'loss_generating': sum(batch['loss_generating_tokens']),
-            }
-
         # Count number of non padding tokens in batch
         if 'attention_mask' in batch:
             input_ids_tokens = int(torch.sum(batch['attention_mask']).item())
         else:
             input_ids_tokens = batch['input_ids'].numel()
-
-        loss_generating_tokens = None
-        if 'labels' in batch:
-            loss_generating_tokens = (
-                batch['labels'].shape[0] * (batch['labels'].shape[1] - 1)
-            ) - torch.count_nonzero(
-                torch.eq(batch['labels'][..., 1:], CROSS_ENTROPY_IGNORE_INDEX),
-            )
 
         # For encoder decoder models only
         decoder_input_ids_tokens = 0
@@ -185,12 +169,6 @@ def get_tokens_per_batch_func(
             decoder_input_ids_tokens = int(
                 torch.sum(batch['decoder_attention_mask']).item(),
             )
-
-        if loss_generating_tokens is not None:
-            return {
-                'total': input_ids_tokens + decoder_input_ids_tokens,
-                'loss_generating': loss_generating_tokens,
-            }
         return input_ids_tokens + decoder_input_ids_tokens
 
     return get_num_tokens_in_batch
