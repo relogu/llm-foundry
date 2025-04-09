@@ -508,7 +508,10 @@ def build_tokenizer(
     os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = '1'
     os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
-    signal_file_path = dist.get_node_signal_file_name()
+    # NOTE: We add to the end of the file the (world) local rank to support situations
+    # where the different nodes share the file system
+    signal_file_path = dist.get_node_signal_file_name(
+    ) + f'_wr_{dist.get_node_rank()!s}'
 
     if dist.is_available() and dist.is_initialized(
     ) and dist.get_world_size() > 1:
