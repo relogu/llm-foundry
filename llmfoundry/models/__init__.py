@@ -11,14 +11,19 @@ from llmfoundry.models.inference_api_wrapper import (
 from llmfoundry.models.llm_embed import ContrastiveModel, FinetuneEmbeddingModel
 from llmfoundry.models.mpt import (
     ComposerMPTCausalLM,
+    ComposerMPTMuPCausalLM,
     MPTConfig,
     MPTForCausalLM,
     MPTModel,
+    MPTMuPConfig,
+    MPTMuPForCausalLM,
+    MPTMuPModel,
     MPTPreTrainedModel,
 )
 from llmfoundry.registry import models
 
 models.register('mpt_causal_lm', func=ComposerMPTCausalLM)
+models.register('mpt_mup_causal_lm', func=ComposerMPTMuPCausalLM)
 models.register('hf_causal_lm', func=ComposerHFCausalLM)
 models.register('hf_t5', func=ComposerHFT5)
 models.register('openai_causal_lm', func=OpenAICausalLMEvalWrapper)
@@ -36,8 +41,12 @@ __all__ = [
     'MPTModel',
     'MPTForCausalLM',
     'ComposerMPTCausalLM',
+    'ComposerMPTMuPCausalLM',
     'OpenAICausalLMEvalWrapper',
     'FMAPICasualLMEvalWrapper',
     'OpenAIChatAPIEvalWrapper',
     'FMAPIChatAPIEvalWrapper',
+    'MPTMuPConfig',
+    'MPTMuPModel',
+    'MPTMuPForCausalLM',
 ]

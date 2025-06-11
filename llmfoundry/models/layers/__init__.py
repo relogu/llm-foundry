@@ -23,6 +23,7 @@ from llmfoundry.models.layers.layer_builders import (
     build_ffn,
     build_norm,
 )
+from llmfoundry.models.layers.mup_embedding import MuPSharedEmbedding
 from llmfoundry.models.layers.norm import (
     LPLayerNorm,
     LPRMSNorm,
@@ -44,6 +45,7 @@ __all__ = [
     'MPTBlock',
     'FusedNormAttentionNorm',
     'SharedEmbedding',
+    'MuPSharedEmbedding',
     'dMoE',
     'LearnedRouter',
     'DroplessMLP',

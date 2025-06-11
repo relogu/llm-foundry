@@ -467,8 +467,15 @@ def build_optimizer(
     optimizer_config: dict[str, Any],
 ) -> Optimizer:
 
-    params = _extract_param_groups(model, optimizer_config)
-    kwargs = {**optimizer_config}
+    if hasattr(model, 'get_optimizer_param_groups'):
+        weight_decay = optimizer_config.get('weight_decay', 0.0)
+        params = model.get_optimizer_param_groups(weight_decay)
+        kwargs = {
+            k: v for k, v in optimizer_config.items() if k != 'weight_decay'
+        }
+    else:
+        params = _extract_param_groups(model, optimizer_config)
+        kwargs = {**optimizer_config}
 
     if 'params' in kwargs:
         raise ValueError(
