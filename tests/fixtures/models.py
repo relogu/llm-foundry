@@ -10,6 +10,7 @@ from transformers import PreTrainedTokenizerBase
 
 from llmfoundry.models.hf.hf_causal_lm import ComposerHFCausalLM
 from llmfoundry.models.mpt.modeling_mpt import ComposerMPTCausalLM
+from llmfoundry.models.mpt.modeling_mpt_mup import ComposerMPTMuPCausalLM
 from llmfoundry.utils.builders import build_composer_model
 
 
@@ -72,6 +73,28 @@ def build_tiny_hf_mpt(
         }
         model = _build_model(config, mpt_tokenizer)
         assert isinstance(model, ComposerHFCausalLM)
+        return model
+
+    return build
+
+
+@fixture
+def build_tiny_mpt_mup(
+    mpt_tokenizer: PreTrainedTokenizerBase,
+) -> Callable[..., ComposerMPTMuPCausalLM]:
+
+    def build(**kwargs: Any) -> ComposerMPTMuPCausalLM:
+        config = {
+            'name': 'mpt_mup_causal_lm',
+            'd_model': 128,
+            'n_heads': 4,
+            'n_layers': 2,
+            'expansion_ratio': 2,
+            'mup_enabled': True,
+        }
+        config.update(kwargs)
+        model = _build_model(config, mpt_tokenizer)
+        assert isinstance(model, ComposerMPTMuPCausalLM)
         return model
 
     return build
@@ -214,7 +237,9 @@ def tiny_neo_tokenizer_helper():
 def tiny_t5_tokenizer_helper():
     transformers = pytest.importorskip('transformers')
 
-    hf_tokenizer = transformers.AutoTokenizer.from_pretrained('t5-base',)
+    hf_tokenizer = transformers.AutoTokenizer.from_pretrained(
+        't5-base',
+    )
     return hf_tokenizer
 
 
