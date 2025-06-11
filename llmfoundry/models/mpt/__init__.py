@@ -10,7 +10,8 @@ from llmfoundry.models.mpt.modeling_mpt import (
     MPTPreTrainedModel,
 )
 from llmfoundry.models.mpt.modeling_mpt_mup import (
-    ComposerMPTMuPCausalLM,
+    ComposerMPTCausalLMWithParamGroups,
+    ComposerMPTCausalLMWithParamGroupsMuP,
     MPTMuPForCausalLM,
     MPTMuPModel,
 )
@@ -24,5 +25,6 @@ __all__ = [
     'MPTMuPConfig',
     'MPTMuPModel',
     'MPTMuPForCausalLM',
-    'ComposerMPTMuPCausalLM',
+    'ComposerMPTCausalLMWithParamGroups',
+    'ComposerMPTCausalLMWithParamGroupsMuP',
 ]

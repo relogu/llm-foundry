@@ -1,11 +1,18 @@
-import torch
-import numpy as np
+# Copyright 2024 MosaicML LLM Foundry authors
+# SPDX-License-Identifier: Apache-2.0
+
 from typing import Callable
+
+import numpy as np
+import torch
+
 from llmfoundry.models.mpt.modeling_mpt import ComposerMPTCausalLM
-from llmfoundry.models.mpt.modeling_mpt_mup import ComposerMPTMuPCausalLM
+from llmfoundry.models.mpt.modeling_mpt_mup import \
+    ComposerMPTCausalLMWithParamGroupsMuP
 
 
-def _run_coord_step(model: torch.nn.Module, vocab_size: int = 64) -> dict[str, float]:
+def _run_coord_step(model: torch.nn.Module,
+                    vocab_size: int = 64) -> dict[str, float]:
     hooks = {}
     results: dict[str, list[float]] = {
         'token_embedding': [],
@@ -15,13 +22,17 @@ def _run_coord_step(model: torch.nn.Module, vocab_size: int = 64) -> dict[str, f
     }
 
     def _hook_factory(key: str):
+
         def _hook(_module, _inp, out):
-            results[key].append(out.detach().abs().mean().item())
+            results[key].append(out[0].detach().abs().mean().item())
+
         return _hook
 
     for name, module in model.named_modules():
         if name == 'transformer.wte':
-            hooks[name] = module.register_forward_hook(_hook_factory('token_embedding'))
+            hooks[name] = module.register_forward_hook(
+                _hook_factory('token_embedding'),
+            )
         elif name.endswith('.attn'):
             hooks[name] = module.register_forward_hook(_hook_factory('attn'))
         elif name.endswith('.mlp'):
@@ -35,7 +46,9 @@ def _run_coord_step(model: torch.nn.Module, vocab_size: int = 64) -> dict[str, f
     for _ in range(2):
         inputs = torch.randint(0, vocab_size, (2, 8))
         labels = torch.randint(0, vocab_size, (2, 8))
-        out = model(input_ids=inputs)
+        out = model({'input_ids': inputs})
+
+        # TODO: Fix this test
         loss = loss_fn(out.logits.view(-1, vocab_size), labels.view(-1))
         loss.backward()
         optim.step()
@@ -47,7 +60,11 @@ def _run_coord_step(model: torch.nn.Module, vocab_size: int = 64) -> dict[str, f
     return {k: float(np.mean(v)) for k, v in results.items()}
 
 
-def _collect_widths(build_fn: Callable[..., ComposerMPTCausalLM], widths: list[int], base_width: int | None = None):
+def _collect_widths(
+    build_fn: Callable[..., ComposerMPTCausalLM],
+    widths: list[int],
+    base_width: int | None = None,
+):
     vals = []
     head_size = 16
     for width in widths:
@@ -55,7 +72,9 @@ def _collect_widths(build_fn: Callable[..., ComposerMPTCausalLM], widths: list[i
         kwargs = {
             'd_model': width,
             'n_heads': n_heads,
-            'attn_config': {'attn_impl': 'torch'},
+            'attn_config': {
+                'attn_impl': 'torch',
+            },
             'loss_fn': 'torch_crossentropy',
         }
         if base_width is not None:
@@ -65,14 +84,18 @@ def _collect_widths(build_fn: Callable[..., ComposerMPTCausalLM], widths: list[i
     return vals
 
 
-def test_coord_check_mup_vs_sp(build_tiny_mpt: Callable[..., ComposerMPTCausalLM],
-                               build_tiny_mpt_mup: Callable[..., ComposerMPTMuPCausalLM]):
+def test_coord_check_mup_vs_sp(
+    build_tiny_mpt: Callable[..., ComposerMPTCausalLM],
+    build_tiny_mpt_mup: Callable[..., ComposerMPTCausalLMWithParamGroupsMuP],
+):
     torch.manual_seed(0)
     widths = [32, 64]
     sp_vals = _collect_widths(build_tiny_mpt, widths)
     mup_vals = _collect_widths(build_tiny_mpt_mup, widths, base_width=widths[0])
 
     sp_diff = abs(sp_vals[1]['token_embedding'] - sp_vals[0]['token_embedding'])
-    mup_diff = abs(mup_vals[1]['token_embedding'] - mup_vals[0]['token_embedding'])
+    mup_diff = abs(
+        mup_vals[1]['token_embedding'] - mup_vals[0]['token_embedding'],
+    )
 
     assert mup_diff < sp_diff

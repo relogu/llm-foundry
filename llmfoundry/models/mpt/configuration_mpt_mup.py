@@ -37,6 +37,10 @@ class MPTMuPConfig(MPTConfig):
 
         if self.mup_enabled and not self.mup_disable_attention_scaling:
             head_dim = self.d_model // self.n_heads
+
+            # NOTE: Assumes that d_keys is head_dim
+            # softmax_scale (Optional[float]): If not None, scale the softmax in the attention layer by this value. If None,
+
             if self.attn_config.get('softmax_scale') is None:
                 self.attn_config = dict(self.attn_config)
                 self.attn_config['softmax_scale'] = 1.0 / float(head_dim)

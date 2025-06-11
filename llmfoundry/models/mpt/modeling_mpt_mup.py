@@ -5,26 +5,13 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
-from composer.metrics import (
-    InContextLearningCodeEvalAccuracy,
-    InContextLearningLMAccuracy,
-    InContextLearningLMExpectedCalibrationError,
-    InContextLearningMCExpectedCalibrationError,
-    InContextLearningMultipleChoiceAccuracy,
-    InContextLearningQAAccuracy,
-)
-from composer.metrics.nlp import LanguageCrossEntropy, LanguagePerplexity
-from composer.models import HuggingFaceModel
-from omegaconf import DictConfig
-from omegaconf import OmegaConf as om
 from torch import nn
-from transformers import PreTrainedTokenizerBase
 
 from ..layers.mup_embedding import MuPSharedEmbedding
 from .configuration_mpt_mup import MPTMuPConfig
-from .modeling_mpt import MPTForCausalLM, MPTModel
+from .modeling_mpt import ComposerMPTCausalLM, MPTForCausalLM, MPTModel
 
 
 class MPTMuPModel(MPTModel):
@@ -49,11 +36,16 @@ class MPTMuPModel(MPTModel):
             # Begin muP code: reinitialize weights following muP rules
             for name, param in self.named_parameters():
                 if name.endswith('Wqkv.weight') or name.endswith('fc1_weight'):
+                    # NOTE: check if we can get the value from param instead of config
                     nn.init.normal_(
                         param,
                         mean=0.0,
-                        std=self.mup_cfg.init_config.get('init_std', 0.02) /
-                        (self.mup_cfg.mup_width_multiplier**0.5),
+                        std=(
+                            init_std if (
+                                init_std :=
+                                self.mup_cfg.init_config.get('init_std', None)
+                            ) is not None else 0.02
+                        ) / (self.mup_cfg.mup_width_multiplier**0.5),
                     )
                 elif name.endswith(
                     'out_proj.weight',
@@ -61,7 +53,12 @@ class MPTMuPModel(MPTModel):
                     nn.init.normal_(
                         param,
                         mean=0.0,
-                        std=self.mup_cfg.init_config.get('init_std', 0.02) / ((
+                        std=(
+                            init_std if (
+                                init_std :=
+                                self.mup_cfg.init_config.get('init_std', None)
+                            ) is not None else 0.02
+                        ) / ((
                             2 * self.mup_cfg.n_layers *
                             self.mup_cfg.mup_width_multiplier
                         )**0.5),
@@ -107,8 +104,8 @@ class MPTMuPModel(MPTModel):
             ]
             # End muP code
         else:
-            decay = [p for n, p in param_dict.items() if p.dim() >= 2]
-            nodecay = [p for n, p in param_dict.items() if p.dim() < 2]
+            decay = [p for _n, p in param_dict.items() if p.dim() >= 2]
+            nodecay = [p for _n, p in param_dict.items() if p.dim() < 2]
             return [
                 {
                     'params': decay,
@@ -146,64 +143,20 @@ class MPTMuPForCausalLM(MPTForCausalLM):
         return self.transformer.get_optimizer_param_groups(weight_decay)
 
 
-class ComposerMPTMuPCausalLM(HuggingFaceModel):
-
-    def __init__(
-        self,
-        om_model_config: DictConfig,
-        tokenizer: Optional[PreTrainedTokenizerBase] = None,
-    ):
-        resolved = om.to_container(om_model_config, resolve=True)
-        hf_config = MPTMuPConfig.from_dict(resolved)
-        model = MPTMuPForCausalLM(hf_config)
-
-        use_train_metrics = om_model_config.get('use_train_metrics', True)
-        train_metrics = [LanguageCrossEntropy(),
-                         LanguagePerplexity()] if use_train_metrics else []
-        eval_metrics = [
-            LanguageCrossEntropy(),
-            LanguagePerplexity(),
-            InContextLearningLMAccuracy(),
-            InContextLearningMultipleChoiceAccuracy(),
-            InContextLearningQAAccuracy(),
-            InContextLearningCodeEvalAccuracy(),
-            InContextLearningLMExpectedCalibrationError(),
-            InContextLearningMCExpectedCalibrationError(),
-        ]
-
-        super().__init__(
-            model=model,
-            tokenizer=tokenizer,
-            use_logits=True,
-            metrics=train_metrics,
-            eval_metrics=eval_metrics,
-            shift_labels=True,
-            allow_embedding_resizing=True,
-        )
-
-        self.n_active_params = sum(p.numel() for p in self.parameters())
-
-        loss_fn_config = om_model_config.get('loss_fn', 'fused_crossentropy')
-        if loss_fn_config == 'fused_crossentropy':
-            try:
-                from flash_attn.losses.cross_entropy import \
-                    CrossEntropyLoss as FusedCrossEntropyLoss
-
-                self.loss_fn = FusedCrossEntropyLoss(ignore_index=-100)
-            except Exception:
-                raise ValueError(
-                    'Fused Cross Entropy is not installed. Either (1) have a CUDA-compatible GPU '
-                    'and `pip install .[gpu]` if installing from source or '
-                    '`pip install xentropy-cuda-lib@git+https://github.com/HazyResearch/flash-attention.git@v1.0.3#subdirectory=csrc/xentropy` '
-                    'if installing from pypi, or (2) set your config model.loss_fn=torch_crossentropy.',
-                )
-        elif loss_fn_config == 'torch_crossentropy':
-            self.loss_fn = nn.CrossEntropyLoss(ignore_index=-100)
-        else:
-            raise ValueError(
-                f'Specified loss_fn={loss_fn_config} not recognized. `loss_fn` must be one of [`fused_crossentropy`, `torch_crossentropy`].',
-            )
+class ComposerMPTCausalLMWithParamGroups(ComposerMPTCausalLM):
+    """Composer wrapper that delegates optimizer param group creation to the underlying model."""
 
     def get_optimizer_param_groups(self, weight_decay: float):
         """Delegate to underlying model to build param groups."""
         return self.model.get_optimizer_param_groups(weight_decay)
+
+
+class ComposerMPTCausalLMWithParamGroupsMuP(ComposerMPTCausalLMWithParamGroups):
+
+    @property
+    def model_class(self) -> type[MPTMuPForCausalLM]:
+        return MPTMuPForCausalLM
+
+    @property
+    def config_class(self) -> type[MPTMuPConfig]:
+        return MPTMuPConfig

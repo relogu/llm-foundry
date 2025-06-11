@@ -1,10 +1,13 @@
+# Copyright 2024 MosaicML LLM Foundry authors
+# SPDX-License-Identifier: Apache-2.0
+
 from unittest.mock import patch
 
 import torch
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
 from llmfoundry.models.layers.mup_embedding import MuPSharedEmbedding
-from llmfoundry.models.mpt import MPTMuPConfig, MPTMuPForCausalLM
+from llmfoundry.models.mpt.configuration_mpt_mup import MPTMuPConfig
 from llmfoundry.models.mpt.modeling_mpt import MPTForCausalLM
 from llmfoundry.utils.builders import build_optimizer
 
@@ -37,7 +40,7 @@ def test_mup_logits_scaling(build_tiny_mpt_mup):
             mup_output_alpha=0.5,
         )
         input_ids = torch.ones(2, 4, dtype=torch.long)
-        out = model(input_ids=input_ids)
+        out = model({'input_ids': input_ids})
         expected_scale = 0.5 / 2.0
         assert torch.allclose(
             out.logits,
