@@ -93,6 +93,7 @@ def build_tiny_mpt_mup(
             'expansion_ratio': 2,
             'mup_enabled': True,
             'loss_fn': 'torch_crossentropy',
+            'mup_cfg.mup_width_multiplier': 2.0,
         }
         config.update(kwargs)
         model = _build_model(config, mpt_tokenizer)

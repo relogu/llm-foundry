@@ -5,8 +5,10 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
+log = logging.getLogger(__name__)
 from torch import nn
 
 from ..layers.mup_embedding import MuPSharedEmbedding
@@ -18,6 +20,7 @@ class MPTMuPModel(MPTModel):
     config_class = MPTMuPConfig
 
     def __init__(self, config: MPTMuPConfig):
+        config._validate_config()
         super().__init__(config)
         if config.mup_enabled:
             # Begin muP code: scale input embeddings
@@ -35,71 +38,91 @@ class MPTMuPModel(MPTModel):
         if self.mup_cfg.mup_enabled:
             # Begin muP code: reinitialize weights following muP rules
             for name, param in self.named_parameters():
-                if name.endswith('Wqkv.weight') or name.endswith('fc1_weight'):
+                if name.endswith(
+                    'Wqkv.weight',
+                ) or name.endswith('ffn.up_proj.weight'):
                     # NOTE: check if we can get the value from param instead of config
+                    muP_std = (
+                        init_std if (
+                            init_std :=
+                            self.mup_cfg.init_config.get('init_std', None)
+                        ) is not None else 0.02
+                    ) / (self.mup_cfg.mup_width_multiplier**0.5)
                     nn.init.normal_(
                         param,
                         mean=0.0,
-                        std=(
-                            init_std if (
-                                init_std :=
-                                self.mup_cfg.init_config.get('init_std', None)
-                            ) is not None else 0.02
-                        ) / (self.mup_cfg.mup_width_multiplier**0.5),
+                        std=muP_std,
                     )
+                    log.debug(f'Initialized {name} with muP std: {muP_std:.4f}')
+
                 elif name.endswith(
                     'out_proj.weight',
-                ) or name.endswith('fc2_weight'):
+                ) or name.endswith('ffn.down_proj.weight'):
+                    muP_std = (
+                        init_std if (
+                            init_std :=
+                            self.mup_cfg.init_config.get('init_std', None)
+                        ) is not None else 0.02
+                    ) / ((
+                        2 * self.mup_cfg.n_layers *
+                        self.mup_cfg.mup_width_multiplier
+                    )**0.5)
                     nn.init.normal_(
                         param,
                         mean=0.0,
-                        std=(
-                            init_std if (
-                                init_std :=
-                                self.mup_cfg.init_config.get('init_std', None)
-                            ) is not None else 0.02
-                        ) / ((
-                            2 * self.mup_cfg.n_layers *
-                            self.mup_cfg.mup_width_multiplier
-                        )**0.5),
+                        std=muP_std,
                     )
+                    log.debug(f'Initialized {name} with muP std: {muP_std:.4f}')
             # End muP code
 
-    def get_optimizer_param_groups(self, weight_decay: float):
+    def get_optimizer_param_groups(self, weight_decay: float, lr: float):
         """Return parameter groups with muP-specific LR scaling."""
         param_dict = {
             n: p for n, p in self.named_parameters() if p.requires_grad
         }
         if self.mup_cfg.mup_enabled and not self.mup_cfg.mup_disable_hidden_lr_scaling:
             # Begin muP code: build parameter groups for muP
+            # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
+            # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
             mup_decay, decay, nodecay = [], [], []
             for n, p in param_dict.items():
                 if p.dim() >= 2:
                     if n.endswith(
                         'Wqkv.weight',
-                    ) or n.endswith('fc1_weight') or n.endswith(
+                    ) or n.endswith(
                         'out_proj.weight',
-                    ) or n.endswith('fc2_weight'):
+                    ) or n.endswith(
+                        'ffn.up_proj.weight',
+                    ) or n.endswith('ffn.down_proj.weight'):
                         mup_decay.append(p)
+                        log.debug(
+                            f'Adding {n} to muP decay group with lr: {lr / self.mup_cfg.mup_width_multiplier:.6f}',
+                        )
                     else:
                         decay.append(p)
+                        log.debug(
+                            f'Adding {n} to decay group with lr: {lr:.6f}',
+                        )
                 else:
                     nodecay.append(p)
+                    log.debug(
+                        f'Adding {n} to no-decay group with lr: {lr:.6f}',
+                    )
             return [
                 {
                     'params': mup_decay,
                     'weight_decay': weight_decay,
-                    'lr_scale': 1.0 / self.mup_cfg.mup_width_multiplier,
+                    'lr': lr / self.mup_cfg.mup_width_multiplier,
                 },
                 {
                     'params': decay,
                     'weight_decay': weight_decay,
-                    'lr_scale': 1.0,
+                    'lr': lr,
                 },
                 {
                     'params': nodecay,
                     'weight_decay': 0.0,
-                    'lr_scale': 1.0,
+                    'lr': lr,
                 },
             ]
             # End muP code
@@ -139,16 +162,16 @@ class MPTMuPForCausalLM(MPTForCausalLM):
             # End muP code
         return outputs
 
-    def get_optimizer_param_groups(self, weight_decay: float):
-        return self.transformer.get_optimizer_param_groups(weight_decay)
+    def get_optimizer_param_groups(self, weight_decay: float, lr: float):
+        return self.transformer.get_optimizer_param_groups(weight_decay, lr)
 
 
 class ComposerMPTCausalLMWithParamGroups(ComposerMPTCausalLM):
     """Composer wrapper that delegates optimizer param group creation to the underlying model."""
 
-    def get_optimizer_param_groups(self, weight_decay: float):
+    def get_optimizer_param_groups(self, weight_decay: float, lr: float):
         """Delegate to underlying model to build param groups."""
-        return self.model.get_optimizer_param_groups(weight_decay)
+        return self.model.get_optimizer_param_groups(weight_decay, lr)
 
 
 class ComposerMPTCausalLMWithParamGroupsMuP(ComposerMPTCausalLMWithParamGroups):

@@ -26,11 +26,10 @@ def test_mup_embedding_and_param_groups(build_tiny_mpt_mup):
     assert isinstance(model.model.transformer.wte, MuPSharedEmbedding)
     assert model.model.transformer.wte.scale == 1.5
 
-    groups = model.model.get_optimizer_param_groups(weight_decay=0.1)
+    groups = model.model.get_optimizer_param_groups(weight_decay=0.1, lr=1.0)
     assert len(groups) == 3
-    assert groups[
-        0]['lr_scale'
-          ] == 1.0 / model.model.transformer.mup_cfg.mup_width_multiplier
+    assert groups[0][
+        'lr'] == 1.0 / model.model.transformer.mup_cfg.mup_width_multiplier
 
 
 def test_mup_logits_scaling(build_tiny_mpt_mup):
@@ -71,4 +70,13 @@ def test_build_optimizer_uses_mup_groups(build_tiny_mpt_mup):
             'weight_decay': 0.01,
         },
     )
-    assert 'lr_scale' in optim.param_groups[0]
+
+    lr_buckets = {p['lr'] for p in optim.param_groups}
+    # Assert we have three groups and one is scaled by the width multiplier
+    assert len(lr_buckets) == 2
+    assert lr_buckets == {1e-3 / 2.0, 1e-3}
+
+    weight_decay_buckets = {p['weight_decay'] for p in optim.param_groups}
+    # Assert we have two groups with weight decay and one without
+    assert len(weight_decay_buckets) == 2
+    assert weight_decay_buckets == {0.01, 0.0}

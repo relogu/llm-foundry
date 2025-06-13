@@ -469,7 +469,11 @@ def build_optimizer(
 
     if hasattr(model, 'get_optimizer_param_groups'):
         weight_decay = optimizer_config.get('weight_decay', 0.0)
-        params = model.get_optimizer_param_groups(weight_decay) # type: ignore[reportGeneralTypeIssues]
+        lr = optimizer_config.get('lr')
+        params = model.get_optimizer_param_groups(
+            weight_decay,
+            lr,
+        )  # type: ignore[reportGeneralTypeIssues]
         kwargs = {
             k: v for k, v in optimizer_config.items() if k != 'weight_decay'
         }
