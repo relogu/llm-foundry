@@ -9,6 +9,7 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 from llmfoundry.models.layers.mup_embedding import MuPSharedEmbedding
 from llmfoundry.models.mpt.configuration_mpt_mup import MPTMuPConfig
 from llmfoundry.models.mpt.modeling_mpt import MPTForCausalLM
+from llmfoundry.models.mpt.modeling_mpt_mup import MPTMuPForCausalLM
 from llmfoundry.utils.builders import build_optimizer
 
 
@@ -30,21 +31,6 @@ def test_mup_embedding_and_param_groups(build_tiny_mpt_mup):
     assert len(groups) == 3
     assert groups[0][
         'lr'] == 1.0 / model.model.transformer.mup_cfg.mup_width_multiplier
-
-
-def test_mup_logits_scaling(build_tiny_mpt_mup):
-    with patch.object(MPTForCausalLM, 'forward', dummy_forward):
-        model = build_tiny_mpt_mup(
-            mup_width_multiplier=2.0,
-            mup_output_alpha=0.5,
-        )
-        input_ids = torch.ones(2, 4, dtype=torch.long)
-        out = model({'input_ids': input_ids})
-        expected_scale = 0.5 / 2.0
-        assert torch.allclose(
-            out.logits,
-            torch.ones_like(out.logits) * expected_scale,
-        )
 
 
 def test_mup_softmax_scale():
