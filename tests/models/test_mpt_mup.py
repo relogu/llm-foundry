@@ -1,19 +1,21 @@
 # Copyright 2024 MosaicML LLM Foundry authors
 # SPDX-License-Identifier: Apache-2.0
 
-from unittest.mock import patch
-
 import torch
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
 from llmfoundry.models.layers.mup_embedding import MuPSharedEmbedding
 from llmfoundry.models.mpt.configuration_mpt_mup import MPTMuPConfig
 from llmfoundry.models.mpt.modeling_mpt import MPTForCausalLM
-from llmfoundry.models.mpt.modeling_mpt_mup import MPTMuPForCausalLM
 from llmfoundry.utils.builders import build_optimizer
 
 
-def dummy_forward(self, input_ids, *args, **kwargs):
+def dummy_forward(
+    self: MPTForCausalLM,
+    input_ids: torch.Tensor,
+    *args: torch.Tensor,
+    **kwargs: torch.Tensor,
+) -> CausalLMOutputWithPast:
     logits = torch.ones(
         input_ids.shape[0],
         input_ids.shape[1],

@@ -23,6 +23,7 @@ from composer.callbacks import (
 from llmfoundry.callbacks.activation_monitor_full_model import \
     ActivationMonitorFullModel
 from llmfoundry.callbacks.async_eval_callback import AsyncEval
+from llmfoundry.callbacks.coord_check import CoordCheckLogger
 from llmfoundry.callbacks.curriculum_learning_callback import CurriculumLearning
 from llmfoundry.callbacks.dataset_swap_callback import DatasetSwap
 from llmfoundry.callbacks.env_logging_callback import EnvironmentLoggingCallback
@@ -66,6 +67,8 @@ callbacks.register('scheduled_gc', func=ScheduledGarbageCollector)
 callbacks.register('oom_observer', func=OOMObserver)
 callbacks.register('eval_output_logging', func=EvalOutputLogging)
 callbacks.register('mbmoe_tok_per_expert', func=MegaBlocksMoE_TokPerExpert)
+# Log activations for MuP coordinate checks
+callbacks.register('coord_check_logger', func=CoordCheckLogger)
 # Add our custom full model activation monitor
 callbacks.register(
     'activation_monitor_full_model',
@@ -94,6 +97,7 @@ __all__ = [
     'MegaBlocksMoE_TokPerExpert',
     'AsyncEval',
     'CurriculumLearning',
+    'CoordCheckLogger',
     'LossPerpVsContextLengthLogger',
     'KillLossSpike',
 ]

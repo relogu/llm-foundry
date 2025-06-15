@@ -22,7 +22,11 @@ def _run_coord_step(model: torch.nn.Module,
 
     def _hook_factory(key: str):
 
-        def _hook(_module, _inp, out):
+        def _hook(
+            _module: torch.nn.Module,
+            _inp: tuple[torch.Tensor],
+            out: torch.Tensor,
+        ) -> None:
             results[key].append(out[0].detach().abs().mean().item())
 
         return _hook
@@ -85,20 +89,16 @@ def test_coord_check_mup_vs_sp(
     build_tiny_mpt: Callable[..., ComposerMPTCausalLM],
     build_tiny_mpt_mup: Callable[..., ComposerMPTCausalLMWithParamGroupsMuP],
 ):
-    # TODO: Make sure this test is reasonable
     torch.manual_seed(0)
     widths = [16, 32, 64, 128]
     sp_vals = _collect_widths(build_tiny_mpt, widths)
     mup_vals = _collect_widths(build_tiny_mpt_mup, widths, base_width=widths[0])
+    sp_diff = abs(sp_vals[-1]['mlp'] - sp_vals[0]['mlp'])
+    mup_diff = abs(mup_vals[-1]['mlp'] - mup_vals[0]['mlp'])
 
-    # sp_diff = abs(sp_vals[-1]['mlp'] - sp_vals[0]['mlp'])
-    # mup_diff = abs(
-    #     mup_vals[-1]['mlp'] - mup_vals[0]['mlp'],
-    # )
     print('Sp vals:', sp_vals)
     print('MuP vals:', mup_vals)
 
-    raise ValueError(
-        'This test is not yet implemented. '
-        'Please implement the coordinate check for MuP vs SP models.',
+    assert mup_diff < sp_diff, (
+        'MuP activations should be more stable across widths than SP.'
     )
