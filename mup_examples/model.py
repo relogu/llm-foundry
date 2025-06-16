@@ -1,5 +1,5 @@
-"""
-Full definition of a GPT Language Model, all of it in this single file.
+"""Full definition of a GPT Language Model, all of it in this single file.
+
 References:
 1) the official GPT-2 TensorFlow implementation released by OpenAI:
 https://github.com/openai/gpt-2/blob/master/src/model.py
@@ -16,7 +16,7 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 class LayerNorm(nn.Module):
-    """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
+    """LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False"""
 
     def __init__(self, ndim, bias):
         super().__init__()
@@ -174,8 +174,7 @@ class GPT(nn.Module):
         print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
 
     def get_num_params(self, non_embedding=True):
-        """
-        Return the number of parameters in the model.
+        """Return the number of parameters in the model.
         For non-embedding count (default), the position embeddings get subtracted.
         The token embeddings would too, except due to the parameter sharing these
         params are actually used as weights in the final layer, so we include them.
@@ -318,7 +317,7 @@ class GPT(nn.Module):
             optim_groups = [
                 {'params': mup_decay_params, 'weight_decay': weight_decay, 'lr_scale': 1/self.config.mup_width_multiplier},
                 {'params': decay_params, 'weight_decay': weight_decay, 'lr_scale': 1},
-                {'params': nodecay_params, 'weight_decay': 0.0, 'lr_scale': 1}
+                {'params': nodecay_params, 'weight_decay': 0.0, 'lr_scale': 1},
             ]
             num_mup_decay_params = sum(p.numel() for p in mup_decay_params)
             num_decay_params = sum(p.numel() for p in decay_params)
@@ -332,7 +331,7 @@ class GPT(nn.Module):
             nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
             optim_groups = [
                 {'params': decay_params, 'weight_decay': weight_decay},
-                {'params': nodecay_params, 'weight_decay': 0.0}
+                {'params': nodecay_params, 'weight_decay': 0.0},
             ]
             num_decay_params = sum(p.numel() for p in decay_params)
             num_nodecay_params = sum(p.numel() for p in nodecay_params)
@@ -348,7 +347,7 @@ class GPT(nn.Module):
         return optimizer
 
     def estimate_mfu(self, fwdbwd_per_iter, dt):
-        """ estimate model flops utilization (MFU) in units of A100 bfloat16 peak FLOPS """
+        """Estimate model flops utilization (MFU) in units of A100 bfloat16 peak FLOPS"""
         # first estimate the number of flops we do per iteration.
         # see PaLM paper Appendix B as ref: https://arxiv.org/abs/2204.02311
         N = self.get_num_params()
@@ -365,8 +364,7 @@ class GPT(nn.Module):
 
     @torch.no_grad()
     def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
-        """
-        Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
+        """Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
         the sequence max_new_tokens times, feeding the predictions back into the model each time.
         Most likely you'll want to make sure to be in model.eval() mode of operation for this.
         """

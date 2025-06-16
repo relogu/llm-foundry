@@ -1,5 +1,4 @@
-"""
-Authored by Gavia Gray (https://github.com/gngdb)
+"""Authored by Gavia Gray (https://github.com/gngdb)
 
 Wrapper for wandb logging with efficient CSV logging and correct config JSON writing.
 The CSV structure maintains a consistent order of keys based on their first appearance,
@@ -35,8 +34,7 @@ import atexit
 def exists(x): return x is not None
 
 def transform_format_string(s):
-    """
-    Transforms a string containing f-string-like expressions to a format
+    """Transforms a string containing f-string-like expressions to a format
     compatible with str.format().
 
     This function converts expressions like '{var=}' or '{var=:formatting}'
