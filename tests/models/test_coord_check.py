@@ -65,8 +65,8 @@ def _collect_widths(
     build_fn: Callable[..., ComposerMPTCausalLM],
     widths: list[int],
     base_width: int | None = None,
-):
-    vals = []
+) -> list[dict[str, float]]:
+    vals: list[dict[str, float]] = []
     head_size = 16
     for width in widths:
         n_heads = max(1, width // head_size)
@@ -88,7 +88,7 @@ def _collect_widths(
 def test_coord_check_mup_vs_sp(
     build_tiny_mpt: Callable[..., ComposerMPTCausalLM],
     build_tiny_mpt_mup: Callable[..., ComposerMPTCausalLMWithParamGroupsMuP],
-):
+) -> None:
     torch.manual_seed(0)
     widths = [16, 32, 64, 128]
     sp_vals = _collect_widths(build_tiny_mpt, widths)

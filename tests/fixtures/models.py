@@ -5,6 +5,7 @@ import copy
 from typing import Any, Callable
 
 import pytest
+from composer.models import ComposerModel
 from pytest import fixture
 from transformers import PreTrainedTokenizerBase
 
@@ -15,7 +16,10 @@ from llmfoundry.models.mpt.modeling_mpt_mup import \
 from llmfoundry.utils.builders import build_composer_model
 
 
-def _build_model(config: dict[str, Any], tokenizer: PreTrainedTokenizerBase):
+def _build_model(
+    config: dict[str, Any],
+    tokenizer: PreTrainedTokenizerBase,
+) -> ComposerModel:
     name = config.pop('name')
     model = build_composer_model(
         name=name,

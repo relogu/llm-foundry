@@ -1,12 +1,16 @@
 # Copyright 2024 MosaicML LLM Foundry authors
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import Callable
+
 import torch
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
 from llmfoundry.models.layers.mup_embedding import MuPSharedEmbedding
 from llmfoundry.models.mpt.configuration_mpt_mup import MPTMuPConfig
 from llmfoundry.models.mpt.modeling_mpt import MPTForCausalLM
+from llmfoundry.models.mpt.modeling_mpt_mup import \
+    ComposerMPTCausalLMWithParamGroupsMuP
 from llmfoundry.utils.builders import build_optimizer
 
 
@@ -24,7 +28,9 @@ def dummy_forward(
     return CausalLMOutputWithPast(logits=logits)
 
 
-def test_mup_embedding_and_param_groups(build_tiny_mpt_mup):
+def test_mup_embedding_and_param_groups(
+    build_tiny_mpt_mup: Callable[..., ComposerMPTCausalLMWithParamGroupsMuP],
+) -> None:
     model = build_tiny_mpt_mup(mup_input_alpha=1.5)
     assert isinstance(model.model.transformer.wte, MuPSharedEmbedding)
     assert model.model.transformer.wte.scale == 1.5
@@ -35,7 +41,7 @@ def test_mup_embedding_and_param_groups(build_tiny_mpt_mup):
         'lr'] == 1.0 / model.model.transformer.mup_cfg.mup_width_multiplier
 
 
-def test_mup_softmax_scale():
+def test_mup_softmax_scale() -> None:
     cfg = MPTMuPConfig(
         d_model=32,
         n_heads=4,
@@ -48,7 +54,9 @@ def test_mup_softmax_scale():
     assert cfg.attn_config['softmax_scale'] == 1.0 / float(head_dim)
 
 
-def test_build_optimizer_uses_mup_groups(build_tiny_mpt_mup):
+def test_build_optimizer_uses_mup_groups(
+    build_tiny_mpt_mup: Callable[..., ComposerMPTCausalLMWithParamGroupsMuP],
+) -> None:
     model = build_tiny_mpt_mup(mup_width_multiplier=2.0)
     optim = build_optimizer(
         model.model,

@@ -6,22 +6,16 @@
 from __future__ import annotations
 
 import logging
-
-log = logging.getLogger(__name__)
 from typing import Any
 
-import torch
-import torch.nn.functional as F
+log = logging.getLogger(__name__)
+
 from torch import nn
-from transformers.modeling_outputs import (
-    BaseModelOutputWithPast,
-    CausalLMOutputWithPast,
-)
+from transformers.modeling_outputs import BaseModelOutputWithPast
 
 from ..layers.mup_embedding import MuPSharedEmbedding
 from .configuration_mpt_mup import MPTMuPConfig
 from .modeling_mpt import (
-    CROSS_ENTROPY_IGNORE_INDEX,
     ComposerMPTCausalLM,
     MPTForCausalLM,
     MPTModel,
@@ -87,7 +81,11 @@ class MPTMuPModel(MPTModel):
                     log.debug(f'Initialized {name} with muP std: {muP_std:.4f}')
             # End muP code
 
-    def get_optimizer_param_groups(self, weight_decay: float, lr: float):
+    def get_optimizer_param_groups(
+        self,
+        weight_decay: float,
+        lr: float,
+    ) -> list[dict[str, Any]]:
         """Return parameter groups with muP-specific LR scaling."""
         param_dict = {
             n: p for n, p in self.named_parameters() if p.requires_grad
@@ -176,14 +174,22 @@ class MPTMuPForCausalLM(MPTForCausalLM):
             self.transformer = MPTMuPModel(config)
         self.mup_cfg = config
 
-    def get_optimizer_param_groups(self, weight_decay: float, lr: float):
+    def get_optimizer_param_groups(
+        self,
+        weight_decay: float,
+        lr: float,
+    ) -> list[dict[str, Any]]:
         return self.transformer.get_optimizer_param_groups(weight_decay, lr)
 
 
 class ComposerMPTCausalLMWithParamGroups(ComposerMPTCausalLM):
     """Composer wrapper that delegates optimizer param group creation to the underlying model."""
 
-    def get_optimizer_param_groups(self, weight_decay: float, lr: float):
+    def get_optimizer_param_groups(
+        self,
+        weight_decay: float,
+        lr: float,
+    ) -> list[dict[str, Any]]:
         """Delegate to underlying model to build param groups."""
         return self.model.get_optimizer_param_groups(weight_decay, lr)
 
