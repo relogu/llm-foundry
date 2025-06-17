@@ -5,7 +5,11 @@ import os
 from typing import Optional
 
 import pytest
-from composer.utils import reproducibility
+
+try:
+    from composer.utils import reproducibility
+except Exception:  # pragma: no cover - composer is optional
+    reproducibility = None
 
 # Allowed options for pytest.mark.world_size()
 # Important: when updating this list, make sure to also up ./.ci/test.sh
@@ -14,13 +18,14 @@ from composer.utils import reproducibility
 WORLD_SIZE_OPTIONS = (1, 2)
 
 # Enforce deterministic mode before any tests start.
-reproducibility.configure_deterministic_mode()
+if reproducibility is not None:
+    reproducibility.configure_deterministic_mode()
 
 # Add the path of any pytest fixture files you want to make global
 pytest_plugins = [
-    'tests.fixtures.autouse',
-    'tests.fixtures.models',
-    'tests.fixtures.data',
+    "tests.fixtures.autouse",
+    "tests.fixtures.models",
+    "tests.fixtures.data",
 ]
 
 
@@ -31,7 +36,7 @@ def _add_option(
     choices: Optional[list[str]] = None,
 ):
     parser.addoption(
-        f'--{name}',
+        f"--{name}",
         default=None,
         type=str,
         choices=choices,
@@ -40,7 +45,7 @@ def _add_option(
     parser.addini(
         name=name,
         help=help,
-        type='string',
+        type="string",
         default=None,
     )
 
@@ -48,7 +53,7 @@ def _add_option(
 def pytest_addoption(parser: pytest.Parser) -> None:
     _add_option(
         parser,
-        'seed',
+        "seed",
         help="""\
         Rank zero seed to use. `reproducibility.seed_all(seed + dist.get_global_rank())` will be invoked
         before each test.""",
@@ -58,7 +63,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 def _get_world_size(item: pytest.Item):
     """Returns the world_size of a test, defaults to 1."""
     _default = pytest.mark.world_size(1).mark
-    return item.get_closest_marker('world_size', default=_default).args[0]
+    return item.get_closest_marker("world_size", default=_default).args[0]
 
 
 def pytest_collection_modifyitems(
@@ -66,7 +71,7 @@ def pytest_collection_modifyitems(
     items: list[pytest.Item],
 ) -> None:
     """Filter tests by world_size (for multi-GPU tests)"""
-    world_size = int(os.environ.get('WORLD_SIZE', '1'))
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
 
     conditions = [
         lambda item: _get_world_size(item) == world_size,
