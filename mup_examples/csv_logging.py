@@ -1,3 +1,6 @@
+# Copyright 2024 MosaicML LLM Foundry authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Authored by Gavia Gray (https://github.com/gngdb)
 
 Wrapper for wandb logging with efficient CSV logging and correct config JSON writing.
@@ -24,18 +27,19 @@ Example usage:
   # cat path/to/output/log_header.csv.tmp path/to/output/log_data.csv.tmp > path/to/output/log.csv
 """
 
-import re
-import os
+import atexit
 import csv
 import json
-import atexit
+import os
+import re
 
 
-def exists(x): return x is not None
+def exists(x):
+    return x is not None
+
 
 def transform_format_string(s):
-    """Transforms a string containing f-string-like expressions to a format
-    compatible with str.format().
+    """Transforms a string containing f-string-like.
 
     This function converts expressions like '{var=}' or '{var=:formatting}'
     to 'var={var}' or 'var={var:formatting}' respectively. This allows
@@ -54,9 +58,15 @@ def transform_format_string(s):
         "Formatted value is x={x:.2f}"
     """
     pattern = r'\{(\w+)=(:.[^}]*)?\}'
-    return re.sub(pattern, lambda m: f"{m.group(1)}={{{m.group(1)}{m.group(2) or ''}}}", s)
+    return re.sub(
+        pattern,
+        lambda m: f"{m.group(1)}={{{m.group(1)}{m.group(2) or ''}}}",
+        s,
+    )
+
 
 class CSVLogWrapper:
+
     def __init__(self, logf=None, config={}, out_dir=None):
         self.logf = logf
         self.config = config
@@ -69,7 +79,7 @@ class CSVLogWrapper:
         self.ordered_keys = []
         self.header_updated = False
         self.is_finalized = False
-        self.no_sync_keyword = 'no_sync' # Keyword to prevent syncing to wandb
+        self.no_sync_keyword = 'no_sync'  # Keyword to prevent syncing to wandb
 
         if self.out_dir:
             os.makedirs(self.out_dir, exist_ok=True)
@@ -110,27 +120,41 @@ class CSVLogWrapper:
 
         if prefix:
             # Filter keys with the given prefix and remove the prefix
-            filtered_dict = {k.replace(prefix, ''): v for k, v in self.log_dict.items() if k.startswith(prefix)}
+            filtered_dict = {
+                k.replace(prefix, ''): v
+                for k, v in self.log_dict.items()
+                if k.startswith(prefix)
+            }
         else:
             filtered_dict = self.log_dict
         # replace any '/' in keys with '_'
-        filtered_dict = {k.replace('/', '_'): v for k, v in filtered_dict.items()}
+        filtered_dict = {
+            k.replace('/', '_'): v for k, v in filtered_dict.items()
+        }
 
         try:
             print(format_string.format(**filtered_dict))
         except KeyError as e:
-            print(f"KeyError: {e}. Available keys: {', '.join(filtered_dict.keys())}")
+            print(
+                f"KeyError: {e}. Available keys: {', '.join(filtered_dict.keys())}",
+            )
             raise e
 
     def step(self):
         if exists(self.logf) and self.log_dict:
-            self.logf({k: v for k, v in self.log_dict.items() if self.no_sync_keyword not in k})
+            self.logf({
+                k: v
+                for k, v in self.log_dict.items()
+                if self.no_sync_keyword not in k
+            })
 
         if self.csv_writer and self.log_dict:
             self.update_header()
 
             # Prepare the row data
-            row_data = [self.step_count] + [self.log_dict.get(key, '') for key in self.ordered_keys]
+            row_data = [self.step_count] + [
+                self.log_dict.get(key, '') for key in self.ordered_keys
+            ]
             self.csv_writer.writerow(row_data)
             self.csv_data_file.flush()  # Ensure data is written to file
 

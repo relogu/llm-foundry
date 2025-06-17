@@ -1,3 +1,6 @@
+# Copyright 2024 MosaicML LLM Foundry authors
+# SPDX-License-Identifier: Apache-2.0
+
 import torch
 
 from mup_examples.model import GPT, GPTConfig

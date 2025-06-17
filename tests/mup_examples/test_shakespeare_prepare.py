@@ -1,3 +1,6 @@
+# Copyright 2024 MosaicML LLM Foundry authors
+# SPDX-License-Identifier: Apache-2.0
+
 import pickle
 import runpy
 from pathlib import Path
@@ -9,6 +12,7 @@ def test_shakespeare_char_prepare(tmp_path, monkeypatch):
     text = 'To be or not to be'
 
     class Resp:
+
         def __init__(self, t):
             self.text = t
 

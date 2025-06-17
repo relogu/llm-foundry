@@ -1,7 +1,11 @@
+# Copyright 2024 MosaicML LLM Foundry authors
+# SPDX-License-Identifier: Apache-2.0
+
 import os
+
+import numpy as np
 import requests
 import tiktoken
-import numpy as np
 
 # download the tiny shakespeare dataset
 input_file_path = os.path.join(os.path.dirname(__file__), 'input.txt')
@@ -13,11 +17,11 @@ if not os.path.exists(input_file_path):
 with open(input_file_path, 'r', encoding='utf-8') as f:
     data = f.read()
 n = len(data)
-train_data = data[:int(n*0.9)]
-val_data = data[int(n*0.9):]
+train_data = data[:int(n * 0.9)]
+val_data = data[int(n * 0.9):]
 
 # encode with tiktoken gpt2 bpe
-enc = tiktoken.get_encoding("gpt2")
+enc = tiktoken.get_encoding('gpt2')
 train_ids = enc.encode_ordinary(train_data)
 val_ids = enc.encode_ordinary(val_data)
 print(f"train has {len(train_ids):,} tokens")

@@ -1,12 +1,17 @@
+# Copyright 2024 MosaicML LLM Foundry authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Prepare the Shakespeare dataset for character-level language modeling.
+
 So instead of encoding with GPT-2 BPE tokens, we just map characters to ints.
 Will save train.bin, val.bin containing the ids, and meta.pkl containing the
 encoder and decoder and some other related info.
 """
 import os
 import pickle
-import requests
+
 import numpy as np
+import requests
 
 # download the tiny shakespeare dataset
 input_file_path = os.path.join(os.path.dirname(__file__), 'input.txt')
@@ -20,23 +25,31 @@ with open(input_file_path, 'r') as f:
 print(f"length of dataset in characters: {len(data):,}")
 
 # get all the unique characters that occur in this text
-chars = sorted(list(set(data)))
+chars = sorted(set(data))
 vocab_size = len(chars)
-print("all the unique characters:", ''.join(chars))
+print('all the unique characters:', ''.join(chars))
 print(f"vocab size: {vocab_size:,}")
 
 # create a mapping from characters to integers
-stoi = { ch:i for i,ch in enumerate(chars) }
-itos = { i:ch for i,ch in enumerate(chars) }
+stoi = {ch: i for i, ch in enumerate(chars)}
+itos = dict(enumerate(chars))
+
+
 def encode(s):
-    return [stoi[c] for c in s] # encoder: take a string, output a list of integers
+    return [
+        stoi[c] for c in s
+    ]  # encoder: take a string, output a list of integers
+
+
 def decode(l):
-    return ''.join([itos[i] for i in l]) # decoder: take a list of integers, output a string
+    return ''.join([itos[i] for i in l],
+                  )  # decoder: take a list of integers, output a string
+
 
 # create the train and test splits
 n = len(data)
-train_data = data[:int(n*0.9)]
-val_data = data[int(n*0.9):]
+train_data = data[:int(n * 0.9)]
+val_data = data[int(n * 0.9):]
 
 # encode both to integers
 train_ids = encode(train_data)

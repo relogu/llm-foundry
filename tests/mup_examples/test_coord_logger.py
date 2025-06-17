@@ -1,10 +1,15 @@
-import torch
+# Copyright 2024 MosaicML LLM Foundry authors
+# SPDX-License-Identifier: Apache-2.0
+
 from types import SimpleNamespace
+
+import torch
 
 from llmfoundry.callbacks.coord_check import CoordCheckLogger
 
 
 class DummyModel(torch.nn.Module):
+
     def __init__(self):
         super().__init__()
         self.wte = torch.nn.Linear(4, 4)
