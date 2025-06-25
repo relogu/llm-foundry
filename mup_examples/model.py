@@ -5,8 +5,7 @@
 
 from __future__ import annotations
 
-import math
-from typing import Any, Tuple
+from typing import Any
 
 import torch
 from torch import nn
@@ -17,7 +16,7 @@ from llmfoundry.utils.builders import build_optimizer
 
 
 class GPTConfig(MPTMuPConfig):
-    """Configuration matching the old ``GPTConfig`` interface."""
+    """Configuration matching the old ``GPTConfig`` interface from nanogpt."""
 
     def __init__(
         self,
@@ -35,6 +34,8 @@ class GPTConfig(MPTMuPConfig):
         mup_width_multiplier: float = 1.0,
         mup_input_alpha: float = 1.0,
         mup_output_alpha: float = 1.0,
+        force_weight_tying: bool = True,
+        tie_word_embeddings: bool = False,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -46,13 +47,22 @@ class GPTConfig(MPTMuPConfig):
             resid_pdrop=dropout,
             emb_pdrop=dropout,
             no_bias=not bias,
-            init_config={"name": "baseline_", "init_std": init_std},
+            init_config={
+                'name': 'baseline_',
+                'init_std': init_std,
+                'emb_init_std': init_std,
+            },
             mup_enabled=mup_enabled,
             mup_disable_attention_scaling=mup_disable_attention_scaling,
             mup_disable_hidden_lr_scaling=mup_disable_hidden_lr_scaling,
             mup_width_multiplier=mup_width_multiplier,
             mup_input_alpha=mup_input_alpha,
             mup_output_alpha=mup_output_alpha,
+            attn_config={
+                'attn_impl': 'torch',
+            },
+            loss_fn='torch_crossentropy',
+            tie_word_embeddings=tie_word_embeddings,
             **kwargs,
         )
 
@@ -64,6 +74,7 @@ class GPTConfig(MPTMuPConfig):
         self.dropout = dropout
         self.bias = bias
         self.init_std = init_std
+        self.force_weight_tying = force_weight_tying
 
 
 class GPT(MPTMuPForCausalLM):
@@ -71,25 +82,29 @@ class GPT(MPTMuPForCausalLM):
 
     def __init__(self, config: GPTConfig):
         super().__init__(config)
+        if config.force_weight_tying:
+            assert self.lm_head is not None, 'lm_head must be defined for weight tying'
+            self.lm_head.weight = self.transformer.wte.weight
 
     # ----------------------------------------------------------------------------
     # Optimizer
     # ----------------------------------------------------------------------------
     def configure_optimizers(
         self,
+        optimizer_name: str,
         weight_decay: float,
         learning_rate: float,
-        betas: Tuple[float, float],
+        betas: tuple[float, float],
         device_type: str,
     ) -> torch.optim.Optimizer:
         """Return optimizer configured using :func:`build_optimizer`."""
         return build_optimizer(
             self,
-            name="decoupled_adamw",
+            name=optimizer_name,
             optimizer_config={
-                "lr": learning_rate,
-                "betas": betas,
-                "weight_decay": weight_decay,
+                'lr': learning_rate,
+                'betas': betas,
+                'weight_decay': weight_decay,
             },
         )
 
@@ -100,9 +115,9 @@ class GPT(MPTMuPForCausalLM):
         """Crop positional embeddings to ``block_size``."""
         assert block_size <= self.config.max_seq_len
         self.config.max_seq_len = block_size
-        if hasattr(self.transformer, "wpe"):
+        if hasattr(self.transformer, 'wpe'):
             self.transformer.wpe.weight = nn.Parameter(
-                self.transformer.wpe.weight[:block_size]
+                self.transformer.wpe.weight[:block_size],
             )
 
     def estimate_mfu(self, fwdbwd_per_iter: int, dt: float) -> float:

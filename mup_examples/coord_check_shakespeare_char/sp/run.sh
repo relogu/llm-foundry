@@ -4,7 +4,7 @@ do
     do
     head_size=64
     n_heads=$((width / head_size))
-    out_dir="mup_examples/coord_check_shakespeare_char/sp/out/width${width}_depth2_seed${seed}"
+    out_dir="coord_check_shakespeare_char/sp/out/width${width}_depth2_seed${seed}"
     python train.py \
         --out_dir=$out_dir \
         --eval_interval=1 \
@@ -34,8 +34,8 @@ do
         --grad_clip=1.0 \
         --decay_lr=False \
         --seed=$seed \
-        --backend='nccl' \
-        --device='mps' \
+        --device='gloo' \
+        --device='cpu' \
         --dtype='float32' \
         --compile=False \
         --mup_enable_coord_check_logging=True

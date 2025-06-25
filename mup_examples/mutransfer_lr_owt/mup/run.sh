@@ -55,7 +55,7 @@ do
                 --mup_input_alpha=1.0 \
                 --mup_output_alpha=1.0 \
                 --seed=$seed \
-                --backend='nccl' \
+                --device='gloo' \
                 --device='cuda' \
                 --dtype='bfloat16' \
                 --compile=True

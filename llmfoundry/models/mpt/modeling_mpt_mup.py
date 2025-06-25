@@ -172,6 +172,9 @@ class MPTMuPForCausalLM(MPTForCausalLM):
         super().__init__(config)
         if not isinstance(self.transformer, MPTMuPModel):
             self.transformer = MPTMuPModel(config)
+
+        if config.init_device != 'meta' and self.lm_head is not None:
+            self.param_init_fn(self.lm_head)
         self.mup_cfg = config
 
     def get_optimizer_param_groups(

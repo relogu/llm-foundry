@@ -6,8 +6,12 @@ do
     n_heads=$((width / head_size))
     mup_base_width=256
     mup_width_multiplier=$(echo "scale=8; $width/$mup_base_width" | bc -l)
-    out_dir="mup_examples/coord_check_shakespeare_char/sp_with_mup_hidden_init_and_lr_partial_output_logits/out/width${width}_depth2_seed${seed}"
-    mup_output_alpha=$(echo "scale=8; sqrt($mup_width_multiplier)" | bc -l)
+    out_dir="coord_check_shakespeare_char/sp_with_mup_hidden_init_and_lr_partial_output_logits/out/width${width}_depth2_seed${seed}"
+    if [ "$width" = 256 ]; then
+        mup_output_alpha=1.0                      # float literal
+    else
+        mup_output_alpha=$(echo "sqrt($mup_width_multiplier)" | bc -l)
+    fi
     python train.py \
         --out_dir=$out_dir \
         --eval_interval=1 \
@@ -44,8 +48,8 @@ do
         --mup_output_alpha=$mup_output_alpha \
         --mup_enable_coord_check_logging=True \
         --seed=$seed \
-        --backend='nccl' \
-        --device='mps' \
+        --device='gloo' \
+        --device='cpu' \
         --dtype='float32' \
         --compile=False
     done

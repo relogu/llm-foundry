@@ -35,13 +35,13 @@ stoi = {ch: i for i, ch in enumerate(chars)}
 itos = dict(enumerate(chars))
 
 
-def encode(s):
+def encode(s: str):
     return [
         stoi[c] for c in s
     ]  # encoder: take a string, output a list of integers
 
 
-def decode(l):
+def decode(l: list[int]):
     return ''.join([itos[i] for i in l],
                   )  # decoder: take a list of integers, output a string
 

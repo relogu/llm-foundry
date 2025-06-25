@@ -17,7 +17,12 @@ class CoordCheckLogger(Callback):
 
     def __init__(self) -> None:
         self.handles: list[RemovableHandle] = []
-        self.reset()
+        self.stats: dict[str, list[float]] = {
+            'token_embedding': [],
+            'attn': [],
+            'mlp': [],
+            'lm_head': [],
+        }
 
     def reset(self) -> None:
         self.stats: dict[str, list[float]] = {

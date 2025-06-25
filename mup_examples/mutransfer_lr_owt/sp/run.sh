@@ -49,7 +49,7 @@ do
                 --grad_clip=1.0 \
                 --decay_lr=True \
                 --seed=$seed \
-                --backend='nccl' \
+                --device='gloo' \
                 --device='cuda' \
                 --dtype='bfloat16' \
                 --compile=True
