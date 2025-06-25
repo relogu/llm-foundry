@@ -6,22 +6,16 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 log = logging.getLogger(__name__)
-import warnings
-from typing import Optional
 
-import torch
-import torch.nn.functional as F
 from torch import nn
-from transformers.modeling_outputs import (
-    CausalLMOutputWithPast,
-)
+from transformers.modeling_outputs import BaseModelOutputWithPast
 
 from ..layers.mup_embedding import MuPSharedEmbedding
 from .configuration_mpt_mup import MPTMuPConfig
 from .modeling_mpt import (
-    CROSS_ENTROPY_IGNORE_INDEX,
     ComposerMPTCausalLM,
     MPTForCausalLM,
     MPTModel,
@@ -87,7 +81,11 @@ class MPTMuPModel(MPTModel):
                     log.debug(f'Initialized {name} with muP std: {muP_std:.4f}')
             # End muP code
 
-    def get_optimizer_param_groups(self, weight_decay: float, lr: float):
+    def get_optimizer_param_groups(
+        self,
+        weight_decay: float,
+        lr: float,
+    ) -> list[dict[str, Any]]:
         """Return parameter groups with muP-specific LR scaling."""
         param_dict = {
             n: p for n, p in self.named_parameters() if p.requires_grad
@@ -152,6 +150,20 @@ class MPTMuPModel(MPTModel):
                 },
             ]
 
+    # Replace forward with method which scales output
+    def forward(self, *args: Any, **kwargs: Any) -> BaseModelOutputWithPast:
+        outputs = super().forward(*args, **kwargs)
+
+        if self.mup_cfg.mup_enabled:
+            # Begin muP code: scale output logits
+            outputs.last_hidden_state = outputs.last_hidden_state * (
+                self.mup_cfg.mup_output_alpha /
+                self.mup_cfg.mup_width_multiplier
+            )
+            # End muP code
+
+        return outputs
+
 
 class MPTMuPForCausalLM(MPTForCausalLM):
     config_class = MPTMuPConfig
@@ -160,99 +172,27 @@ class MPTMuPForCausalLM(MPTForCausalLM):
         super().__init__(config)
         if not isinstance(self.transformer, MPTMuPModel):
             self.transformer = MPTMuPModel(config)
+
+        if config.init_device != 'meta' and self.lm_head is not None:
+            self.param_init_fn(self.lm_head)
         self.mup_cfg = config
 
-    def forward(
+    def get_optimizer_param_groups(
         self,
-        input_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[list[tuple[torch.FloatTensor]]] = None,
-        attention_mask: Optional[torch.ByteTensor] = None,
-        sequence_id: Optional[torch.LongTensor] = None,
-        labels: Optional[torch.LongTensor] = None,
-        return_dict: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        use_cache: Optional[bool] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-    ) -> CausalLMOutputWithPast:
-        return_dict = (
-            return_dict if return_dict is not None else self.config.return_dict
-        )
-        use_cache = (
-            use_cache if use_cache is not None else self.config.use_cache
-        )
-
-        outputs = self.transformer(
-            input_ids=input_ids,
-            past_key_values=past_key_values,
-            attention_mask=attention_mask,
-            sequence_id=sequence_id,
-            return_dict=return_dict,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            use_cache=use_cache,
-            inputs_embeds=inputs_embeds,
-            position_ids=position_ids,
-        )
-        logits = outputs.last_hidden_state
-
-        if self.mup_cfg.mup_enabled:
-            # Begin muP code: scale output logits
-            logits = logits * (
-                self.mup_cfg.mup_output_alpha /
-                self.mup_cfg.mup_width_multiplier
-            )
-            # End muP code
-
-        if self.lm_head is not None:
-            logits = self.lm_head(logits)
-        else:
-            # move outputs to same device as weights for token embedding
-            # needed to support HF `device_map`
-            out = logits
-            out = out.to(self.transformer.wte.weight.device)
-            logits = self.transformer.wte(out, True)
-
-        if self.logit_scale is not None:
-            if self.logit_scale == 0:
-                warnings.warn(
-                    f'Multiplying logits by {self.logit_scale=}. This will produce uniform (uninformative) outputs.',
-                )
-            logits *= self.logit_scale
-
-        # TODO: Decide what to do with softcapping
-        # when using muP.
-        if self.final_logit_softcapping is not None:
-            logits = self.final_logit_softcapping * torch.tanh(
-                logits / self.final_logit_softcapping,
-            )
-
-        loss = None
-        if labels is not None:
-            _labels = torch.roll(labels, shifts=-1)
-            _labels[:, -1] = CROSS_ENTROPY_IGNORE_INDEX
-            loss = F.cross_entropy(
-                logits.view(-1, logits.size(-1)),
-                _labels.to(logits.device).view(-1),
-            )
-
-        return CausalLMOutputWithPast(
-            loss=loss,
-            logits=logits,
-            past_key_values=outputs.past_key_values,
-            hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
-        )
-
-    def get_optimizer_param_groups(self, weight_decay: float, lr: float):
+        weight_decay: float,
+        lr: float,
+    ) -> list[dict[str, Any]]:
         return self.transformer.get_optimizer_param_groups(weight_decay, lr)
 
 
 class ComposerMPTCausalLMWithParamGroups(ComposerMPTCausalLM):
     """Composer wrapper that delegates optimizer param group creation to the underlying model."""
 
-    def get_optimizer_param_groups(self, weight_decay: float, lr: float):
+    def get_optimizer_param_groups(
+        self,
+        weight_decay: float,
+        lr: float,
+    ) -> list[dict[str, Any]]:
         """Delegate to underlying model to build param groups."""
         return self.model.get_optimizer_param_groups(weight_decay, lr)
 

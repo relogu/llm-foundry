@@ -5,6 +5,7 @@ import copy
 from typing import Any, Callable
 
 import pytest
+from composer.models import ComposerModel
 from pytest import fixture
 from transformers import PreTrainedTokenizerBase
 
@@ -13,9 +14,13 @@ from llmfoundry.models.mpt.modeling_mpt import ComposerMPTCausalLM
 from llmfoundry.models.mpt.modeling_mpt_mup import \
     ComposerMPTCausalLMWithParamGroupsMuP
 from llmfoundry.utils.builders import build_composer_model
+from mup_examples.model import GPT, GPTConfig
 
 
-def _build_model(config: dict[str, Any], tokenizer: PreTrainedTokenizerBase):
+def _build_model(
+    config: dict[str, Any],
+    tokenizer: PreTrainedTokenizerBase,
+) -> ComposerModel:
     name = config.pop('name')
     model = build_composer_model(
         name=name,

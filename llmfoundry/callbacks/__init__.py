@@ -1,10 +1,10 @@
 # Copyright 2022 MosaicML LLM Foundry authors
 # SPDX-License-Identifier: Apache-2.0
 
-from composer.callbacks import \
-    LoadCheckpoint  # type: ignore[reportGeneralTypeIssues]
-from composer.callbacks import \
-    NoiseScaleMonitor  # type: ignore[reportGeneralTypeIssues]
+from composer.callbacks import LoadCheckpoint  # type: ignore[reportGeneralTypeIssues]
+
+from composer.callbacks import NoiseScaleMonitor  # type: ignore[reportGeneralTypeIssues]
+
 from composer.callbacks import (
     ActivationMonitor,
     EarlyStopper,
@@ -20,9 +20,11 @@ from composer.callbacks import (
     SystemMetricsMonitor,
 )
 
-from llmfoundry.callbacks.activation_monitor_full_model import \
-    ActivationMonitorFullModel
+from llmfoundry.callbacks.activation_monitor_full_model import (
+    ActivationMonitorFullModel,
+)
 from llmfoundry.callbacks.async_eval_callback import AsyncEval
+from llmfoundry.callbacks.coord_check import CoordCheckLogger
 from llmfoundry.callbacks.curriculum_learning_callback import CurriculumLearning
 from llmfoundry.callbacks.dataset_swap_callback import DatasetSwap
 from llmfoundry.callbacks.env_logging_callback import EnvironmentLoggingCallback
@@ -34,8 +36,7 @@ from llmfoundry.callbacks.kill_loss_spike_callback import KillLossSpike
 from llmfoundry.callbacks.log_mbmoe_tok_per_expert_callback import (
     MegaBlocksMoE_TokPerExpert,
 )
-from llmfoundry.callbacks.loss_perp_v_len_callback import \
-    LossPerpVsContextLengthLogger
+from llmfoundry.callbacks.loss_perp_v_len_callback import LossPerpVsContextLengthLogger
 from llmfoundry.callbacks.monolithic_ckpt_callback import (
     MonolithicCheckpointSaver,
 )
@@ -66,6 +67,8 @@ callbacks.register('scheduled_gc', func=ScheduledGarbageCollector)
 callbacks.register('oom_observer', func=OOMObserver)
 callbacks.register('eval_output_logging', func=EvalOutputLogging)
 callbacks.register('mbmoe_tok_per_expert', func=MegaBlocksMoE_TokPerExpert)
+# Log activations for MuP coordinate checks
+callbacks.register('coord_check_logger', func=CoordCheckLogger)
 # Add our custom full model activation monitor
 callbacks.register(
     'activation_monitor_full_model',
@@ -94,6 +97,7 @@ __all__ = [
     'MegaBlocksMoE_TokPerExpert',
     'AsyncEval',
     'CurriculumLearning',
+    'CoordCheckLogger',
     'LossPerpVsContextLengthLogger',
     'KillLossSpike',
 ]

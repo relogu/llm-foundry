@@ -157,3 +157,5 @@ notebooks/
 **/mlruns/*
 **/tokenizer-save-dir-*/**
 **/.downloaded_finetuning/
+mup_examples/data
+mup_examples/**/out*
