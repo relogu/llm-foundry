@@ -1,6 +1,8 @@
 # Copyright 2024 MosaicML LLM Foundry authors
 # SPDX-License-Identifier: Apache-2.0
 
+from collections.abc import Callable
+from unittest.mock import patch
 
 import torch
 from transformers.modeling_outputs import CausalLMOutputWithPast
@@ -8,7 +10,8 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 from llmfoundry.models.layers.mup_embedding import MuPSharedEmbedding
 from llmfoundry.models.mpt.configuration_mpt_mup import MPTMuPConfig
 from llmfoundry.models.mpt.modeling_mpt import MPTForCausalLM
-from mup_examples.model import GPT, GPTConfig
+from llmfoundry.models.mpt.modeling_mpt_mup import \
+    ComposerMPTCausalLMWithParamGroupsMuP
 from llmfoundry.utils.builders import build_optimizer
 
 
@@ -26,24 +29,33 @@ def dummy_forward(
     return CausalLMOutputWithPast(logits=logits)
 
 
-def test_mup_embedding_and_param_groups() -> None:
-    cfg = GPTConfig(
-        n_embd=32,
-        n_head=4,
-        n_layer=2,
-        vocab_size=64,
-        mup_enabled=True,
-        mup_input_alpha=1.5,
-        mup_width_multiplier=2.0,
-        attn_config={"attn_impl": "torch"},
-    )
-    model = GPT(cfg)
+def test_mup_embedding_and_param_groups(
+    build_tiny_mpt_mup: Callable[..., ComposerMPTCausalLMWithParamGroupsMuP],
+) -> None:
+    model = build_tiny_mpt_mup(mup_input_alpha=1.5)
     assert isinstance(model.transformer.wte, MuPSharedEmbedding)
     assert model.transformer.wte.scale == 1.5
 
     groups = model.get_optimizer_param_groups(weight_decay=0.1, lr=1.0)
     assert len(groups) == 3
-    assert groups[0]["lr"] == 1.0 / cfg.mup_width_multiplier
+    assert groups[0]['lr'] == 1.0 / 1.5
+
+
+def test_mup_logits_scaling(
+    build_tiny_mpt_mup: Callable[..., ComposerMPTCausalLMWithParamGroupsMuP],
+):
+    with patch.object(MPTForCausalLM, 'forward', dummy_forward):
+        model = build_tiny_mpt_mup(
+            mup_width_multiplier=2.0,
+            mup_output_alpha=0.5,
+        )
+        input_ids = torch.ones(2, 4, dtype=torch.long)
+        out = model({'input_ids': input_ids})
+        expected_scale = 0.5 / 2.0
+        assert torch.allclose(
+            out.logits,
+            torch.ones_like(out.logits) * expected_scale,
+        )
 
 
 def test_mup_softmax_scale() -> None:
@@ -52,39 +64,34 @@ def test_mup_softmax_scale() -> None:
         n_heads=4,
         n_layers=2,
         vocab_size=64,
-        attn_config={"attn_impl": "torch"},
+        attn_config={'attn_impl': 'torch'},
         mup_enabled=True,
+        tie_word_embeddings=True,
+        force_weight_tying=False,
     )
     head_dim = cfg.d_model // cfg.n_heads
-    assert cfg.attn_config["softmax_scale"] == 1.0 / float(head_dim)
+    assert cfg.attn_config['softmax_scale'] == 1.0 / float(head_dim)
 
 
-def test_build_optimizer_uses_mup_groups() -> None:
-    cfg = GPTConfig(
-        n_embd=32,
-        n_head=4,
-        n_layer=2,
-        vocab_size=64,
-        mup_enabled=True,
-        mup_width_multiplier=2.0,
-        attn_config={"attn_impl": "torch"},
-    )
-    model = GPT(cfg)
+def test_build_optimizer_uses_mup_groups(
+    build_tiny_mpt_mup: Callable[..., ComposerMPTCausalLMWithParamGroupsMuP],
+) -> None:
+    model = build_tiny_mpt_mup(mup_width_multiplier=2.0)
     optim = build_optimizer(
-        model,
-        "decoupled_adamw",
+        model.model,
+        'decoupled_adamw',
         {
-            "lr": 1e-3,
-            "weight_decay": 0.01,
+            'lr': 1e-3,
+            'weight_decay': 0.01,
         },
     )
 
-    lr_buckets = {p["lr"] for p in optim.param_groups}
+    lr_buckets = {p['lr'] for p in optim.param_groups}
     # Assert we have three groups and one is scaled by the width multiplier
     assert len(lr_buckets) == 2
     assert lr_buckets == {1e-3 / 2.0, 1e-3}
 
-    weight_decay_buckets = {p["weight_decay"] for p in optim.param_groups}
+    weight_decay_buckets = {p['weight_decay'] for p in optim.param_groups}
     # Assert we have two groups with weight decay and one without
     assert len(weight_decay_buckets) == 2
     assert weight_decay_buckets == {0.01, 0.0}

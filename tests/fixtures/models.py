@@ -14,6 +14,7 @@ from llmfoundry.models.mpt.modeling_mpt import ComposerMPTCausalLM
 from llmfoundry.models.mpt.modeling_mpt_mup import \
     ComposerMPTCausalLMWithParamGroupsMuP
 from llmfoundry.utils.builders import build_composer_model
+from mup_examples.model import GPT, GPTConfig
 
 
 def _build_model(

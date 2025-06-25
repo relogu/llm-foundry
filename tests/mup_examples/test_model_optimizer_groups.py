@@ -21,6 +21,7 @@ def _build_model(mup_enabled: bool) -> GPT:
 def test_optimizer_groups_mup():
     model = _build_model(True)
     optim = model.configure_optimizers(
+        optimizer_name='decoupled_adamw',
         weight_decay=0.1,
         learning_rate=1e-3,
         betas=(0.9, 0.95),
@@ -32,6 +33,7 @@ def test_optimizer_groups_mup():
 def test_optimizer_groups_sp():
     model = _build_model(False)
     optim = model.configure_optimizers(
+        optimizer_name='decoupled_adamw',
         weight_decay=0.1,
         learning_rate=1e-3,
         betas=(0.9, 0.95),
