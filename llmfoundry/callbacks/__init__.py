@@ -3,10 +3,8 @@
 
 from composer.callbacks import LoadCheckpoint  # type: ignore[reportGeneralTypeIssues]
 
-try:
-    from composer.callbacks import NoiseScaleMonitor  # type: ignore[reportGeneralTypeIssues]
-except Exception:  # pragma: no cover - optional Composer callback
-    NoiseScaleMonitor = None
+from composer.callbacks import NoiseScaleMonitor  # type: ignore[reportGeneralTypeIssues]
+
 from composer.callbacks import (
     ActivationMonitor,
     EarlyStopper,
@@ -57,8 +55,7 @@ callbacks.register('memory_snapshot', func=MemorySnapshot)
 callbacks.register('speed_monitor', func=SpeedMonitor)
 callbacks.register('runtime_estimator', func=RuntimeEstimator)
 callbacks.register('optimizer_monitor', func=OptimizerMonitor)
-if NoiseScaleMonitor is not None:
-    callbacks.register('noise_scale_monitor', func=NoiseScaleMonitor)
+callbacks.register('noise_scale_monitor', func=NoiseScaleMonitor)
 callbacks.register('generate_callback', func=Generate)
 callbacks.register('early_stopper', func=EarlyStopper)
 callbacks.register('fdiff_metrics', func=FDiffMetrics)
