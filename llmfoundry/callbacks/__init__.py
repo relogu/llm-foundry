@@ -50,57 +50,57 @@ from llmfoundry.callbacks.run_timeout_callback import RunTimeoutCallback
 from llmfoundry.callbacks.scheduled_gc_callback import ScheduledGarbageCollector
 from llmfoundry.registry import callbacks, callbacks_with_config
 
-callbacks.register("system_metrics_monitor", func=SystemMetricsMonitor)
-callbacks.register("lr_monitor", func=LRMonitor)
-callbacks.register("memory_monitor", func=MemoryMonitor)
-callbacks.register("memory_snapshot", func=MemorySnapshot)
-callbacks.register("speed_monitor", func=SpeedMonitor)
-callbacks.register("runtime_estimator", func=RuntimeEstimator)
-callbacks.register("optimizer_monitor", func=OptimizerMonitor)
+callbacks.register('system_metrics_monitor', func=SystemMetricsMonitor)
+callbacks.register('lr_monitor', func=LRMonitor)
+callbacks.register('memory_monitor', func=MemoryMonitor)
+callbacks.register('memory_snapshot', func=MemorySnapshot)
+callbacks.register('speed_monitor', func=SpeedMonitor)
+callbacks.register('runtime_estimator', func=RuntimeEstimator)
+callbacks.register('optimizer_monitor', func=OptimizerMonitor)
 if NoiseScaleMonitor is not None:
-    callbacks.register("noise_scale_monitor", func=NoiseScaleMonitor)
-callbacks.register("generate_callback", func=Generate)
-callbacks.register("early_stopper", func=EarlyStopper)
-callbacks.register("fdiff_metrics", func=FDiffMetrics)
-callbacks.register("hf_checkpointer", func=HuggingFaceCheckpointer)
-callbacks.register("global_lr_scaling", func=GlobalLRScaling)
-callbacks.register("layer_freezing", func=LayerFreezing)
-callbacks.register("mono_checkpoint_saver", func=MonolithicCheckpointSaver)
-callbacks.register("scheduled_gc", func=ScheduledGarbageCollector)
-callbacks.register("oom_observer", func=OOMObserver)
-callbacks.register("eval_output_logging", func=EvalOutputLogging)
-callbacks.register("mbmoe_tok_per_expert", func=MegaBlocksMoE_TokPerExpert)
+    callbacks.register('noise_scale_monitor', func=NoiseScaleMonitor)
+callbacks.register('generate_callback', func=Generate)
+callbacks.register('early_stopper', func=EarlyStopper)
+callbacks.register('fdiff_metrics', func=FDiffMetrics)
+callbacks.register('hf_checkpointer', func=HuggingFaceCheckpointer)
+callbacks.register('global_lr_scaling', func=GlobalLRScaling)
+callbacks.register('layer_freezing', func=LayerFreezing)
+callbacks.register('mono_checkpoint_saver', func=MonolithicCheckpointSaver)
+callbacks.register('scheduled_gc', func=ScheduledGarbageCollector)
+callbacks.register('oom_observer', func=OOMObserver)
+callbacks.register('eval_output_logging', func=EvalOutputLogging)
+callbacks.register('mbmoe_tok_per_expert', func=MegaBlocksMoE_TokPerExpert)
 # Log activations for MuP coordinate checks
-callbacks.register("coord_check_logger", func=CoordCheckLogger)
+callbacks.register('coord_check_logger', func=CoordCheckLogger)
 # Add our custom full model activation monitor
 callbacks.register(
-    "activation_monitor_full_model",
+    'activation_monitor_full_model',
     func=ActivationMonitorFullModel,
 )
-callbacks.register("activation_monitor", func=ActivationMonitor)
-callbacks.register("run_timeout", func=RunTimeoutCallback)
-callbacks.register("loss_perp_v_len", func=LossPerpVsContextLengthLogger)
-callbacks.register("env_logging", func=EnvironmentLoggingCallback)
-callbacks.register("nan_monitor", func=NaNMonitor)
-callbacks.register("kill_loss_spike", func=KillLossSpike)
-callbacks.register("load_checkpoint", func=LoadCheckpoint)
+callbacks.register('activation_monitor', func=ActivationMonitor)
+callbacks.register('run_timeout', func=RunTimeoutCallback)
+callbacks.register('loss_perp_v_len', func=LossPerpVsContextLengthLogger)
+callbacks.register('env_logging', func=EnvironmentLoggingCallback)
+callbacks.register('nan_monitor', func=NaNMonitor)
+callbacks.register('kill_loss_spike', func=KillLossSpike)
+callbacks.register('load_checkpoint', func=LoadCheckpoint)
 
-callbacks_with_config.register("async_eval", func=AsyncEval)
-callbacks_with_config.register("curriculum_learning", func=CurriculumLearning)
-callbacks_with_config.register("dataset_swap", func=DatasetSwap)
+callbacks_with_config.register('async_eval', func=AsyncEval)
+callbacks_with_config.register('curriculum_learning', func=CurriculumLearning)
+callbacks_with_config.register('dataset_swap', func=DatasetSwap)
 
 __all__ = [
-    "FDiffMetrics",
-    "MonolithicCheckpointSaver",
-    "GlobalLRScaling",
-    "LayerFreezing",
-    "ScheduledGarbageCollector",
-    "EvalGauntlet",
-    "HuggingFaceCheckpointer",
-    "MegaBlocksMoE_TokPerExpert",
-    "AsyncEval",
-    "CurriculumLearning",
-    "CoordCheckLogger",
-    "LossPerpVsContextLengthLogger",
-    "KillLossSpike",
+    'FDiffMetrics',
+    'MonolithicCheckpointSaver',
+    'GlobalLRScaling',
+    'LayerFreezing',
+    'ScheduledGarbageCollector',
+    'EvalGauntlet',
+    'HuggingFaceCheckpointer',
+    'MegaBlocksMoE_TokPerExpert',
+    'AsyncEval',
+    'CurriculumLearning',
+    'CoordCheckLogger',
+    'LossPerpVsContextLengthLogger',
+    'KillLossSpike',
 ]
