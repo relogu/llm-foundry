@@ -5,9 +5,12 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from .configuration_mpt import MPTConfig
+
+log = logging.getLogger(__name__)
 
 
 class MPTMuPConfig(MPTConfig):
@@ -44,5 +47,8 @@ class MPTMuPConfig(MPTConfig):
             if self.attn_config.get('softmax_scale') is None:
                 self.attn_config = dict(self.attn_config)
                 self.attn_config['softmax_scale'] = 1.0 / float(head_dim)
+                log.info(
+                    f"Setting attention softmax scale to {self.attn_config['softmax_scale']:.6f}",
+                )
 
         # End __init__

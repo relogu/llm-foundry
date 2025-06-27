@@ -13,6 +13,7 @@ from llmfoundry.models.layers.attention import (
     scaled_multihead_dot_product_attention,
 )
 from llmfoundry.models.layers.blocks import FusedNormAttentionNorm, MPTBlock
+from llmfoundry.models.layers.completep_block import MPTCompletePBlock
 from llmfoundry.models.layers.custom_embedding import SharedEmbedding
 from llmfoundry.models.layers.dmoe import DroplessMLP, LearnedRouter, dMoE
 from llmfoundry.models.layers.fc import *
@@ -43,6 +44,7 @@ __all__ = [
     'build_alibi_bias',
     'check_alibi_support',
     'MPTBlock',
+    'MPTCompletePBlock',
     'FusedNormAttentionNorm',
     'SharedEmbedding',
     'MuPSharedEmbedding',

@@ -59,7 +59,9 @@ class MPTMuPModel(MPTModel):
                         mean=0.0,
                         std=muP_std,
                     )
-                    log.debug(f'Initialized {name} with muP std: {muP_std:.4f}')
+                    log.warning(
+                        f'Initialized {name} with muP std: {muP_std:.4f}',
+                    )
 
                 elif name.endswith(
                     'out_proj.weight',
@@ -78,15 +80,18 @@ class MPTMuPModel(MPTModel):
                         mean=0.0,
                         std=muP_std,
                     )
-                    log.debug(f'Initialized {name} with muP std: {muP_std:.4f}')
+                    log.warning(
+                        f'Initialized {name} with muP std: {muP_std:.4f}',
+                    )
             # End muP code
 
     def get_optimizer_param_groups(
         self,
-        weight_decay: float,
-        lr: float,
-    ) -> list[dict[str, Any]]:
+        optimizer_config: dict[str, Any],
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         """Return parameter groups with muP-specific LR scaling."""
+        weight_decay: float = optimizer_config.pop('weight_decay')
+        lr: float = optimizer_config.pop('lr')
         param_dict = {
             n: p for n, p in self.named_parameters() if p.requires_grad
         }
@@ -105,17 +110,17 @@ class MPTMuPModel(MPTModel):
                         'ffn.up_proj.weight',
                     ) or n.endswith('ffn.down_proj.weight'):
                         mup_decay.append(p)
-                        log.debug(
+                        log.warning(
                             f'Adding {n} to muP decay group with lr: {lr / self.mup_cfg.mup_width_multiplier:.6f}',
                         )
                     else:
                         decay.append(p)
-                        log.debug(
+                        log.warning(
                             f'Adding {n} to decay group with lr: {lr:.6f}',
                         )
                 else:
                     nodecay.append(p)
-                    log.debug(
+                    log.warning(
                         f'Adding {n} to no-decay group with lr: {lr:.6f}',
                     )
             return [
@@ -134,7 +139,7 @@ class MPTMuPModel(MPTModel):
                     'weight_decay': 0.0,
                     'lr': lr,
                 },
-            ]
+            ], optimizer_config
             # End muP code
         else:
             decay = [p for _n, p in param_dict.items() if p.dim() >= 2]
@@ -143,12 +148,14 @@ class MPTMuPModel(MPTModel):
                 {
                     'params': decay,
                     'weight_decay': weight_decay,
+                    'lr': lr,
                 },
                 {
                     'params': nodecay,
                     'weight_decay': 0.0,
+                    'lr': lr,
                 },
-            ]
+            ], optimizer_config
 
     # Replace forward with method which scales output
     def forward(self, *args: Any, **kwargs: Any) -> BaseModelOutputWithPast:
@@ -159,6 +166,9 @@ class MPTMuPModel(MPTModel):
             outputs.last_hidden_state = outputs.last_hidden_state * (
                 self.mup_cfg.mup_output_alpha /
                 self.mup_cfg.mup_width_multiplier
+            )
+            log.warning(
+                f'Scaling output logits by {self.mup_cfg.mup_output_alpha / self.mup_cfg.mup_width_multiplier:.4f}',
             )
             # End muP code
 
@@ -179,10 +189,9 @@ class MPTMuPForCausalLM(MPTForCausalLM):
 
     def get_optimizer_param_groups(
         self,
-        weight_decay: float,
-        lr: float,
-    ) -> list[dict[str, Any]]:
-        return self.transformer.get_optimizer_param_groups(weight_decay, lr)
+        optimizer_config: dict[str, Any],
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        return self.transformer.get_optimizer_param_groups(optimizer_config)
 
 
 class ComposerMPTCausalLMWithParamGroups(ComposerMPTCausalLM):
@@ -190,11 +199,10 @@ class ComposerMPTCausalLMWithParamGroups(ComposerMPTCausalLM):
 
     def get_optimizer_param_groups(
         self,
-        weight_decay: float,
-        lr: float,
-    ) -> list[dict[str, Any]]:
+        optimizer_config: dict[str, Any],
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         """Delegate to underlying model to build param groups."""
-        return self.model.get_optimizer_param_groups(weight_decay, lr)
+        return self.model.get_optimizer_param_groups(optimizer_config)
 
 
 class ComposerMPTCausalLMWithParamGroupsMuP(ComposerMPTCausalLMWithParamGroups):
