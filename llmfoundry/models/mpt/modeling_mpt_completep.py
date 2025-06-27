@@ -20,6 +20,11 @@ log = logging.getLogger(__name__)
 class MPTCompletePModel(MPTMuPModel):
     config_class = MPTCompletePConfig
 
+    def __init__(self, config: MPTCompletePConfig):
+        config._validate_config()
+        super().__init__(config)
+        self.mup_cfg = config
+
     @property
     def block_class(self) -> type[MPTCompletePBlock]:
         return MPTCompletePBlock
@@ -79,15 +84,16 @@ class MPTCompletePModel(MPTMuPModel):
             depth_lr_scaling = self.mup_cfg.depth_multiplier**(
                 self.mup_cfg.depth_alpha_exp - 1
             ) if self.mup_cfg.depth_alpha_enabled else 1.0
-            og_eps = optimizer_config['eps']
-            optimizer_config['eps'] *= (1 /
-                                        self.config.mup_width_multiplier) * (
-                                            self.config.depth_multiplier**
-                                            (-1 * self.config.depth_alpha_exp)
-                                        )
-            log.warning(
-                f"Using width_lr_scaling: {width_lr_scaling}, depth_lr_scaling: {depth_lr_scaling}, eps: {optimizer_config['eps']} scaled from {og_eps}",
-            )
+            if self.mup_cfg.eps_scaling_enabled:
+                og_eps = optimizer_config['eps']
+                optimizer_config['eps'
+                                ] *= (1 / self.config.mup_width_multiplier) * (
+                                    self.config.depth_multiplier
+                                    **(-1 * self.config.depth_alpha_exp)
+                                )
+                log.warning(
+                    f"Using width_lr_scaling: {width_lr_scaling}, depth_lr_scaling: {depth_lr_scaling}, eps: {optimizer_config['eps']} scaled from {og_eps}",
+                )
             return [
                 {
                     'params': emb_params,
