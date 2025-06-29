@@ -9,7 +9,15 @@ import os
 import re
 import warnings
 from collections import OrderedDict
-from typing import Any, ContextManager, Iterable, Optional, Union
+from typing import (
+    Any,
+    ContextManager,
+    Iterable,
+    Optional,
+    Protocol,
+    Union,
+    runtime_checkable,
+)
 
 import torch
 from composer.core import Algorithm, Callback, Evaluator
@@ -461,14 +469,31 @@ def _extract_param_groups(
     return model.parameters()
 
 
+@runtime_checkable
+class HasGetParamGroups(Protocol):
+    def get_optimizer_param_groups(           # <- exact signature
+        self,
+        optimizer_config: dict[str, Any],
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        ...
+
+
 def build_optimizer(
     model: torch.nn.Module,
     name: str,
     optimizer_config: dict[str, Any],
 ) -> Optimizer:
 
-    params = _extract_param_groups(model, optimizer_config)
-    kwargs = {**optimizer_config}
+    if isinstance(model, HasGetParamGroups):
+        params, new_optim_config = model.get_optimizer_param_groups(
+            optimizer_config,
+        )
+        kwargs = {
+            **new_optim_config,
+        }
+    else:
+        params = _extract_param_groups(model, optimizer_config)
+        kwargs = {**optimizer_config}
 
     if 'params' in kwargs:
         raise ValueError(

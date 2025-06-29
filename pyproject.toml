@@ -65,7 +65,7 @@ include = [
 
 # Pyright
 [tool.pyright]
-exclude = ['env-**', 'venv*', '.venv']
+exclude = ['env-**', 'venv*', '.venv', 'tests', 'tests/**', 'parametrisation_examples', 'parametrisation_examples/**']
 stubPath = ""  # suppress useless 'stubPath is not a valid directory' errors
 
 reportUnnecessaryIsInstance = "none" # it is ok to do this for clarity or safety

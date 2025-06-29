@@ -5,15 +5,24 @@ import copy
 from typing import Any, Callable
 
 import pytest
+from composer.models import ComposerModel
 from pytest import fixture
 from transformers import PreTrainedTokenizerBase
 
 from llmfoundry.models.hf.hf_causal_lm import ComposerHFCausalLM
 from llmfoundry.models.mpt.modeling_mpt import ComposerMPTCausalLM
+from llmfoundry.models.mpt.modeling_mpt_completep import \
+    ComposerMPTCausalLMWithParamGroupsCompleteP
+from llmfoundry.models.mpt.modeling_mpt_mup import \
+    ComposerMPTCausalLMWithParamGroupsMuP
 from llmfoundry.utils.builders import build_composer_model
+from parametrisation_examples.model import GPT, GPTConfig
 
 
-def _build_model(config: dict[str, Any], tokenizer: PreTrainedTokenizerBase):
+def _build_model(
+    config: dict[str, Any],
+    tokenizer: PreTrainedTokenizerBase,
+) -> ComposerModel:
     name = config.pop('name')
     model = build_composer_model(
         name=name,
@@ -72,6 +81,57 @@ def build_tiny_hf_mpt(
         }
         model = _build_model(config, mpt_tokenizer)
         assert isinstance(model, ComposerHFCausalLM)
+        return model
+
+    return build
+
+
+@fixture
+def build_tiny_mpt_mup(
+    mpt_tokenizer: PreTrainedTokenizerBase,
+) -> Callable[..., ComposerMPTCausalLMWithParamGroupsMuP]:
+
+    def build(**kwargs: Any) -> ComposerMPTCausalLMWithParamGroupsMuP:
+        config = {
+            'name': 'mpt_mup_causal_lm',
+            'd_model': 128,
+            'n_heads': 4,
+            'n_layers': 2,
+            'expansion_ratio': 2,
+            'mup_enabled': True,
+            'loss_fn': 'torch_crossentropy',
+            'mup_cfg.mup_width_multiplier': 2.0,
+        }
+        config.update(kwargs)
+        model = _build_model(config, mpt_tokenizer)
+        assert isinstance(model, ComposerMPTCausalLMWithParamGroupsMuP)
+        return model
+
+    return build
+
+
+@fixture
+def build_tiny_mpt_completep(
+    mpt_tokenizer: PreTrainedTokenizerBase,
+) -> Callable[..., ComposerMPTCausalLMWithParamGroupsCompleteP]:
+
+    def build(**kwargs: Any) -> ComposerMPTCausalLMWithParamGroupsCompleteP:
+        config = {
+            'name': 'mpt_completep_causal_lm',
+            'd_model': 128,
+            'n_heads': 4,
+            'n_layers': 2,
+            'expansion_ratio': 2,
+            'mup_enabled': True,
+            'depth_alpha_enabled': True,
+            'depth_multiplier': 2.0,
+            'depth_alpha_exp': 0.5,
+            'loss_fn': 'torch_crossentropy',
+            'mup_cfg.mup_width_multiplier': 2.0,
+        }
+        config.update(kwargs)
+        model = _build_model(config, mpt_tokenizer)
+        assert isinstance(model, ComposerMPTCausalLMWithParamGroupsCompleteP)
         return model
 
     return build

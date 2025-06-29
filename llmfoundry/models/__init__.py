@@ -11,14 +11,28 @@ from llmfoundry.models.inference_api_wrapper import (
 from llmfoundry.models.llm_embed import ContrastiveModel, FinetuneEmbeddingModel
 from llmfoundry.models.mpt import (
     ComposerMPTCausalLM,
+    ComposerMPTCausalLMWithParamGroups,
+    ComposerMPTCausalLMWithParamGroupsCompleteP,
+    ComposerMPTCausalLMWithParamGroupsMuP,
+    MPTCompletePConfig,
+    MPTCompletePForCausalLM,
+    MPTCompletePModel,
     MPTConfig,
     MPTForCausalLM,
     MPTModel,
+    MPTMuPConfig,
+    MPTMuPForCausalLM,
+    MPTMuPModel,
     MPTPreTrainedModel,
 )
 from llmfoundry.registry import models
 
 models.register('mpt_causal_lm', func=ComposerMPTCausalLM)
+models.register('mpt_mup_causal_lm', func=ComposerMPTCausalLMWithParamGroupsMuP)
+models.register(
+    'mpt_completep_causal_lm',
+    func=ComposerMPTCausalLMWithParamGroupsCompleteP,
+)
 models.register('hf_causal_lm', func=ComposerHFCausalLM)
 models.register('hf_t5', func=ComposerHFT5)
 models.register('openai_causal_lm', func=OpenAICausalLMEvalWrapper)
@@ -36,8 +50,17 @@ __all__ = [
     'MPTModel',
     'MPTForCausalLM',
     'ComposerMPTCausalLM',
+    'ComposerMPTCausalLMWithParamGroups',
+    'ComposerMPTCausalLMWithParamGroupsMuP',
+    'ComposerMPTCausalLMWithParamGroupsCompleteP',
     'OpenAICausalLMEvalWrapper',
     'FMAPICasualLMEvalWrapper',
     'OpenAIChatAPIEvalWrapper',
     'FMAPIChatAPIEvalWrapper',
+    'MPTMuPConfig',
+    'MPTMuPModel',
+    'MPTMuPForCausalLM',
+    'MPTCompletePConfig',
+    'MPTCompletePModel',
+    'MPTCompletePForCausalLM',
 ]
