@@ -41,7 +41,7 @@ def test_flash2(model_name: str, use_flash_attention_2: bool, init_device: str):
         raise ValueError(f'Unknown model: {model_name}')
 
     if use_flash_attention_2:
-        model_cfg['use_flash_attention_2'] = True
+        model_cfg['attn_implementation'] = 'flash_attention_2'
 
     tokenizer = build_tokenizer(
         tokenizer_name=tokenizer_name,
@@ -83,7 +83,8 @@ def test_flash2(model_name: str, use_flash_attention_2: bool, init_device: str):
             ],
                                         return_tensors='pt',
                                         padding=True)
-            tokenized_input['labels'] = tokenized_input['input_ids'].clone()
+            cloned = tokenized_input['input_ids'].clone()  # type: ignore
+            tokenized_input['labels'] = cloned
 
             tokenized_input = {k: v.cuda() for k, v in tokenized_input.items()}
             model.to('cuda')

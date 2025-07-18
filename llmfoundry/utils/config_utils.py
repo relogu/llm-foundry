@@ -455,7 +455,7 @@ def calculate_batch_size_info(
             )
             device_microbatch_size = device_batch_size
         device_grad_accum = math.ceil(
-            device_batch_size / device_microbatch_size,
+            device_batch_size / device_microbatch_size,  # type: ignore
         )
     else:
         raise ValueError(f'Not sure how to parse {device_microbatch_size=}')

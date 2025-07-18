@@ -20,7 +20,8 @@ import torch
 import torch.nn as nn
 import transformers
 from composer import ComposerModel, Trainer
-from composer.loggers import MLFlowLogger
+from composer.core import State
+from composer.loggers import Logger, MLFlowLogger
 from composer.utils import dist, get_device
 from omegaconf import DictConfig
 from omegaconf import OmegaConf as om
@@ -225,11 +226,17 @@ def check_hf_tokenizer_equivalence(
         attr_value1 = attr1 if isinstance(
             attr1,
             str,
-        ) else attr1.content if hasattr(attr1, 'content') else str(attr1)
+        ) else attr1.content if hasattr(  # type: ignore
+            attr1,
+            'content',
+        ) else str(attr1)
         attr_value2 = attr2 if isinstance(
             attr2,
             str,
-        ) else attr2.content if hasattr(attr2, 'content') else str(attr2)
+        ) else attr2.content if hasattr(  # type: ignore
+            attr2,
+            'content',
+        ) else str(attr2)
         assert attr_value1 == attr_value2
 
     # Ignore 'extra_special_tokens' as it was added by the transformers library during save/load
@@ -271,8 +278,8 @@ def check_hf_model_equivalence(
     model2: PreTrainedModel,
     just_lora: bool = False,
 ):
-    remove_moe_world_size(model1.config)
-    remove_moe_world_size(model2.config)
+    remove_moe_world_size(model1.config)  # type: ignore
+    remove_moe_world_size(model2.config)  # type: ignore
 
     expected_model_config_dict = model1.config.to_dict()
     new_model_config_dict = model2.config.to_dict()
@@ -689,7 +696,7 @@ def test_huggingface_conversion_callback_interval(
         break
 
     check_hf_model_equivalence(
-        trainer.state.model.model.to(precision),
+        trainer.state.model.model.to(precision),  # type: ignore
         loaded_model,
     )
     check_hf_tokenizer_equivalence(mpt_tokenizer, loaded_tokenizer)
@@ -758,11 +765,12 @@ def _get_model_and_tokenizer(
             'config_overrides': {
                 'max_position_embeddings': max_seq_len,
                 'hidden_size': 36,
+                'vocab_size': 50368,
             },
             'pretrained': False,
             'init_device': 'cpu',
         }
-        tokenizer_name = 'EleutherAI/gpt-neo-125M'
+        tokenizer_name = 'EleutherAI/gpt-neox-20b'
     elif model == 'llama2':
         assert tie_word_embeddings is None
         if 'HF_TOKEN' not in os.environ:
@@ -1503,6 +1511,7 @@ def test_mptmoe_huggingface_conversion_callback(
     max_seq_len = 16
     device_batch_size = 1
     dataset_size = 2
+    precision_torch = torch.float32
     precision_str = 'float32'
     batches_per_epoch = math.ceil(dataset_size / (device_batch_size * 2))
 
@@ -1691,7 +1700,7 @@ def test_mptmoe_huggingface_conversion_callback(
 
             # Check that the loaded model has the correct precision, and then set it back
             # to the original for the equivalence check
-            assert loaded_model.config.torch_dtype == precision_str
+            assert loaded_model.config.torch_dtype == precision_torch
             loaded_model.config.torch_dtype = original_model.model.config.torch_dtype  # type: ignore
 
             loaded_tokenizer = transformers.AutoTokenizer.from_pretrained(
@@ -1717,7 +1726,16 @@ def test_mptmoe_huggingface_conversion_callback(
                 submodule.register_parameter(param_name, param)
 
         if dist.get_global_rank() == 0:
-            check_hf_model_equivalence(trainer.state.model.model, loaded_model)
+            assert loaded_tokenizer is not None
+            assert loaded_model is not None
+            assert isinstance(
+                trainer.state.model.model.module,
+                transformers.PreTrainedModel,
+            )
+            check_hf_model_equivalence(
+                trainer.state.model.model.module,
+                loaded_model,
+            )
             check_hf_tokenizer_equivalence(tokenizer, loaded_tokenizer)
 
             # Check output equivalence
@@ -1813,10 +1831,10 @@ def test_generation_config_variants(
     generation_config: Optional[Union[dict[str, Any], GenerationConfig]],
 ):
 
-    class MockModel(nn.Module):
+    class MockModel(PreTrainedModel, nn.Module):
 
         def __init__(self, config: PretrainedConfig):
-            super().__init__()
+            nn.Module.__init__(self)
             self.config = config
             # Ensure generation_config is always a GenerationConfig object
             if isinstance(config.generation_config, dict):
@@ -1851,3 +1869,72 @@ def test_generation_config_variants(
         upload_to_save_folder=False,
         register_to_mlflow=False,
     )
+
+
+@patch(
+    'llmfoundry.callbacks.hf_checkpointer.SpawnProcess',
+    new=MockSpawnProcess,
+)
+def test_save_additional_contents(request: pytest.FixtureRequest):
+    """Tests the call of save additional contents."""
+
+    class ExtendedHuggingFaceCheckpointer(HuggingFaceCheckpointer):
+
+        def __init__(self, *args: Any, **kwargs: Any):
+            super().__init__(*args, **kwargs)
+            self._calls = 0
+            self._save_dir_calls: list[str] = []
+
+        @property
+        def calls(self) -> int:
+            return self._calls
+
+        @property
+        def save_dir_calls(self) -> list[str]:
+            return self._save_dir_calls
+
+        def save_additional_contents(
+            self,
+            state: State,
+            logger: Logger,
+            save_dir: str,
+        ):
+            self._calls += 1
+            self._save_dir_calls.append(save_dir)
+
+    model_cfg, tokenizer_name = _get_model_and_tokenizer(
+        model='neo',
+        max_seq_len=10,
+        tie_word_embeddings=None,
+        precision='bfloat16',
+    )
+    tokenizer = get_tokenizer_fixture_by_name(request, tokenizer_name)
+
+    original_model = build_composer_model(
+        model_cfg.pop('name'),
+        tokenizer=tokenizer,
+        cfg=model_cfg,
+    )
+
+    logger = MagicMock()
+    state = MagicMock()
+    state.timestamp.batch = 1
+    state.is_model_ddp = False
+    state.model = original_model
+    state.model.tokenizer = tokenizer
+
+    checkpointer = ExtendedHuggingFaceCheckpointer(
+        save_folder='test',
+        save_interval='1ba',
+    )
+    mlflow_logger_mock = _create_mlflow_logger_mock()
+    checkpointer.mlflow_loggers = [mlflow_logger_mock]  # type: ignore
+    checkpointer._save_checkpoint(
+        state=state,
+        logger=logger,
+        upload_to_save_folder=True,
+        register_to_mlflow=True,
+    )
+
+    assert checkpointer.calls == 2
+    assert checkpointer.save_dir_calls[0] != checkpointer.save_dir_calls[1]

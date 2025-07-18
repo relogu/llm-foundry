@@ -13,7 +13,7 @@ import time
 import warnings
 from multiprocessing.context import SpawnProcess
 from pathlib import Path
-from typing import Any, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Any, Optional, Sequence, Union
 
 import numpy as np
 import torch
@@ -47,6 +47,9 @@ from llmfoundry.models.utils import init_empty_weights
 from llmfoundry.utils.exceptions import StoragePermissionError
 from llmfoundry.utils.huggingface_hub_utils import \
     edit_files_for_hf_compatibility
+
+if TYPE_CHECKING:
+    from peft import PeftModel
 
 try:
     import transformer_engine.pytorch as te
@@ -215,6 +218,11 @@ def _log_model_with_multi_process(
 
 class HuggingFaceCheckpointer(Callback):
     """Save a huggingface formatted checkpoint during training.
+
+    The shard size for saving a checkpoint can be controlled by setting the
+    environment variable ``LLM_FOUNDRY_SAVE_FOLDER_HF_MAX_SHARD_SIZE``.
+    Documentation for this parameter can be found at
+    https://huggingface.co/docs/transformers/en/main_classes/model#transformers.PreTrainedModel.push_to_hub.max_shard_size
 
     Args:
         save_folder (str): Top level folder to save checkpoints to (can be a
@@ -487,9 +495,9 @@ class HuggingFaceCheckpointer(Callback):
 
     def transform_model_and_tokenizer(
         self,
-        model: PreTrainedModel,
+        model: Union[PreTrainedModel, 'PeftModel'],
         tokenizer: PreTrainedTokenizerBase,
-    ) -> tuple[PreTrainedModel, PreTrainedTokenizerBase]:
+    ) -> tuple[Union[PreTrainedModel, 'PeftModel'], PreTrainedTokenizerBase]:
         """Transform the model and tokenizer before saving.
 
         This allows a subclass to modify the model and tokenizer before saving. The base class implementation will
@@ -537,8 +545,8 @@ class HuggingFaceCheckpointer(Callback):
 
     def transform_model_pre_registration(
         self,
-        model: PreTrainedModel,
-    ) -> PreTrainedModel:
+        model: Union[PreTrainedModel, 'PeftModel'],
+    ) -> Union[PreTrainedModel, 'PeftModel']:
         """Transform the model before registering with MLflow.
 
         This allows a subclass to modify the model before registering with MLflow. The base class implementation will
@@ -551,6 +559,23 @@ class HuggingFaceCheckpointer(Callback):
             PreTrainedModel: The transformed model.
         """
         return model
+
+    def save_additional_contents(
+        self,
+        state: State,
+        logger: Logger,
+        save_dir: str,
+    ):
+        """Save any additional contents other than the checkpoint and tokenizer.
+
+        This would be useful for saving any other potential objects that is part of the state.
+
+        Args:
+            state (State): The training state.
+            logger (Logger): The logger.
+            save_dir (str): The directory to save the additional contents.
+        """
+        pass
 
     def _get_hf_model(self, state: State):
         self.last_checkpoint_batch = state.timestamp.batch
@@ -565,17 +590,23 @@ class HuggingFaceCheckpointer(Callback):
         log.debug('Gathering state dict')
 
         if state.is_model_ddp:
-            original_model: PreTrainedModel = state.model.module.model  # type: ignore
+            original_model: Union[
+                PreTrainedModel,
+                'PeftModel'] = state.model.module.model  # type: ignore
             state_dict_model = state.model.module.model  # type: ignore
-            original_tokenizer = state.model.module.tokenizer  # type: ignore
+            original_tokenizer: PreTrainedTokenizerBase = state.model.module.tokenizer  # type: ignore
         elif isinstance(state.model.model, FSDP):
-            original_model: PreTrainedModel = state.model.model.module  # type: ignore
+            original_model: Union[
+                PreTrainedModel,
+                'PeftModel'] = state.model.model.module  # type: ignore
             state_dict_model = state.model.model  # type: ignore
-            original_tokenizer = state.model.tokenizer  # type: ignore
+            original_tokenizer: PreTrainedTokenizerBase = state.model.tokenizer  # type: ignore
         else:
-            original_model: PreTrainedModel = state.model.model  # type: ignore
+            original_model: Union[
+                PreTrainedModel,
+                'PeftModel'] = state.model.model  # type: ignore
             state_dict_model = state.model.model  # type: ignore
-            original_tokenizer = state.model.tokenizer  # type: ignore
+            original_tokenizer: PreTrainedTokenizerBase = state.model.tokenizer  # type: ignore
 
         cpu_offload = True
 
@@ -612,7 +643,9 @@ class HuggingFaceCheckpointer(Callback):
         assert isinstance(state_dict_model, nn.Module)
 
         for _, module in state_dict_model.named_modules():
-            hooks.append(module._register_state_dict_hook(tensor_hook),)
+            hooks.append(
+                module._register_state_dict_hook(tensor_hook),
+            )
 
         state_dict = get_model_state_dict(
             state_dict_model,
@@ -631,7 +664,7 @@ class HuggingFaceCheckpointer(Callback):
 
             # Transform HF config before building 2nd model copy
             new_config = self.transform_config(
-                original_config=original_model.config,
+                original_config=original_model.config,  # type: ignore
             )
 
             log.debug(f'Creating new model instance')
@@ -640,25 +673,33 @@ class HuggingFaceCheckpointer(Callback):
             # initialization cost.
             with init_empty_weights():
                 if self.using_peft:
-                    active_adapter = original_model.active_adapter
-                    base_model = original_model.get_base_model()
+                    from peft import PeftModel
+                    assert isinstance(original_model, PeftModel)
+                    active_adapter = original_model.active_adapter  # type: ignore
+                    base_model: PreTrainedModel = original_model.get_base_model(  # type: ignore
+                    )
                     new_base_model_instance = type(base_model)(new_config)
 
                     new_model_instance = type(original_model)(
-                        new_base_model_instance,
-                        original_model.peft_config[active_adapter],
+                        new_base_model_instance,  # type: ignore
+                        original_model.
+                        peft_config[active_adapter],  # type: ignore
                     )
                     del new_base_model_instance
                 else:
+                    assert isinstance(original_model, PreTrainedModel)
                     new_model_instance = type(original_model)(new_config)
                     if new_model_instance.generation_config is not None:
+                        assert original_model.generation_config is not None
                         new_model_instance.generation_config.update(
                             **original_model.generation_config.to_dict(),
                         )
 
             # Then load the state dict in with "assign" so that the state dict
             # is loaded properly even though the model is initially on meta device.
-            new_model_instance.load_state_dict(state_dict, assign=True)
+            new_model_instance.load_state_dict(  # type: ignore
+                state_dict, assign=True,
+            )
             del state_dict
 
             # Transform the model and tokenizer before saving
@@ -671,23 +712,38 @@ class HuggingFaceCheckpointer(Callback):
             if self.pretrained_model_name is not None:
                 new_model_instance.name_or_path = self.pretrained_model_name
                 if self.using_peft:
+                    from peft import PeftModel
+                    assert isinstance(new_model_instance, PeftModel)
                     new_model_instance.base_model.name_or_path = self.pretrained_model_name
-                    for k in new_model_instance.peft_config.keys():
-                        new_model_instance.peft_config[
+                    for k in new_model_instance.peft_config.keys(  # type: ignore
+                    ):
+                        new_model_instance.peft_config[  # type: ignore
                             k
-                        ].base_model_name_or_path = self.pretrained_model_name
+                        ].base_model_name_or_path = self.pretrained_model_name  # type: ignore
 
             log.debug('Saving Hugging Face checkpoint to disk')
 
         return new_model_instance, original_tokenizer
 
-    def _register_hf_model(
+    def register_hf_model(
         self,
+        state: State,
+        logger: Logger,
         temp_save_dir: str,
         original_tokenizer: PreTrainedTokenizerBase,
         use_temp_dir: bool,
-        new_model_instance: PreTrainedModel,
+        new_model_instance: Union[PreTrainedModel, 'PeftModel'],
     ):
+        """Register the model to MLflow.
+
+        Args:
+            state (State): The training state.
+            logger (Logger): The logger.
+            temp_save_dir (str): The temporary save directory.
+            original_tokenizer (PreTrainedTokenizerBase): The original tokenizer.
+            use_temp_dir (bool): Whether to use a temporary directory.
+            new_model_instance (Union[PreTrainedModel, PeftModel]): The new model instance.
+        """
         assert new_model_instance is not None
         new_model_instance = self.transform_model_pre_registration(
             new_model_instance,
@@ -704,6 +760,12 @@ class HuggingFaceCheckpointer(Callback):
             original_tokenizer.save_pretrained(register_save_dir)
 
         self.pre_register_edit(register_save_dir)
+
+        self.save_additional_contents(
+            state,
+            logger,
+            register_save_dir,
+        )
 
         for mlflow_logger in self.mlflow_loggers:
             if self.mlflow_registered_model_name:
@@ -759,8 +821,6 @@ class HuggingFaceCheckpointer(Callback):
             upload_to_save_folder (bool): Whether to upload the HF checkpoint to the save folder.
             register_to_mlflow (bool): Whether to register the model to MLFlow
         """
-        del logger  # unused
-
         save_dir = format_name_with_dist_and_time(
             str(
                 Path(self.save_dir_format_str) /
@@ -787,10 +847,16 @@ class HuggingFaceCheckpointer(Callback):
                     True,
                 ) if is_te_imported and state.precision == Precision.AMP_FP8 else contextlib.nullcontext(
                 )
+
+                _LLM_FOUNDRY_SAVE_FOLDER_HF_MAX_SHARD_SIZE = os.environ.get(
+                    'LLM_FOUNDRY_SAVE_FOLDER_HF_MAX_SHARD_SIZE',
+                    '1GB',
+                )
                 with context_manager:
                     new_model_instance.save_pretrained(
                         temp_save_dir,
-                        max_shard_size='1GB',
+                        max_shard_size=
+                        _LLM_FOUNDRY_SAVE_FOLDER_HF_MAX_SHARD_SIZE,
                     )
                 if original_tokenizer is not None:  # type: ignore
                     assert isinstance(
@@ -802,12 +868,18 @@ class HuggingFaceCheckpointer(Callback):
                     )
 
                 # Only need to edit files for MPT because it has custom code
-                if new_model_instance.config.model_type == 'mpt':
+                if new_model_instance.config.model_type == 'mpt':  # type: ignore
                     log.debug('Editing MPT files for HuggingFace compatibility')
                     edit_files_for_hf_compatibility(
                         temp_save_dir,
                         self.flatten_imports,
                     )
+
+                self.save_additional_contents(
+                    state,
+                    logger,
+                    temp_save_dir,
+                )
 
                 if self.remote_ud is not None:
                     for filename in os.listdir(temp_save_dir):
@@ -837,11 +909,19 @@ class HuggingFaceCheckpointer(Callback):
                     None,
                 )
                 if model_name is not None:
+                    from peft import PeftModel
+                    assert isinstance(new_model_instance, PeftModel)
+                    assert isinstance(
+                        new_model_instance.model,
+                        PreTrainedModel,
+                    )
                     new_model_instance.name_or_path = model_name
                     new_model_instance.model.name_or_path = model_name
                     new_model_instance.base_model.name_or_path = model_name
             if register_to_mlflow:
-                self._register_hf_model(
+                self.register_hf_model(
+                    state,
+                    logger,
                     temp_save_dir,
                     original_tokenizer,
                     use_temp_dir,

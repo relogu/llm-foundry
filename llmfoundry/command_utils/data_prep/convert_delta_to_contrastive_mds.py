@@ -42,7 +42,10 @@ def validate_columns_in_table(
 
         # Get the actual column names
         assert result
-        actual_columns = [row.asDict()['col_name'] for row in result]
+        actual_columns = [
+            row.asDict()['col_name']
+            for row in result  # type: ignore[reportGeneralTypeIssues]
+        ]
 
         missing_required = set(required_columns) - set(actual_columns)
         allowed_columns = set(required_columns + optional_columns)

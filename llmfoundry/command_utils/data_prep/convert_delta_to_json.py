@@ -237,7 +237,7 @@ def run_query(
             raise ValueError(f'cursor cannot be None if using method dbsql')
         cursor.execute(query)
         if collect:
-            return cursor.fetchall()
+            return cursor.fetchall()  # type: ignore[reportGeneralTypeIssues]
     elif method == 'dbconnect':
         if spark == None:
             raise ValueError(f'sparkSession is required for dbconnect')
@@ -632,7 +632,9 @@ def validate_and_get_cluster_info(
 
             else:
                 if not cluster_id:
-                    raise ValueError('cluster_id is needed for dbconnect.',)
+                    raise ValueError(
+                        'cluster_id is needed for dbconnect.',
+                    )
                 sparkSession = DatabricksSession.builder.remote(
                     host=databricks_host,
                     token=databricks_token,
@@ -747,12 +749,12 @@ def fetch_DT(
                 message=
                 f'You do not have permission to attach to the data preparation cluster you provided. {e}',
             ) from e
-        if isinstance(e, grpc.RpcError) and e.code(
-        ) == grpc.StatusCode.INTERNAL and 'Job aborted due to stage failure' in e.details(
+        if isinstance(e, grpc.RpcError) and e.code(  # type: ignore[reportGeneralTypeIssues]
+        ) == grpc.StatusCode.INTERNAL and 'Job aborted due to stage failure' in e.details(  # type: ignore[reportGeneralTypeIssues]
         ):
             raise FaultyDataPrepCluster(
                 message=
-                f'Faulty data prep cluster, please try swapping data prep cluster: {e.details()}',
+                f'Faulty data prep cluster, please try swapping data prep cluster: {e.details()}',  # type: ignore[reportGeneralTypeIssues]
             ) from e
         raise e
 

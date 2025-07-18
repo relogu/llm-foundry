@@ -1,6 +1,5 @@
 # Copyright 2022 MosaicML LLM Foundry authors
 # SPDX-License-Identifier: Apache-2.0
-
 """Implements a Hugging Face T5 wrapped inside a :class:`.ComposerModel`."""
 
 from __future__ import annotations
@@ -46,8 +45,8 @@ class ComposerHFT5(BaseHuggingFaceModel):
         tokenizer (PreTrainedTokenizer): The tokenizer that the model will use.
     """
 
-    model_cls: Union[_BaseAutoModelClass,
-                     PreTrainedModel] = AutoModelForSeq2SeqLM
+    model_cls: Union[type[_BaseAutoModelClass],
+                     type[PreTrainedModel]] = AutoModelForSeq2SeqLM
     default_train_metrics: tuple = tuple(DEFAULT_ENC_DEC_METRICS)
     default_eval_metrics: tuple = ()
 

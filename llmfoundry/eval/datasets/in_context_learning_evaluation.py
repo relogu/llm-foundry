@@ -18,6 +18,7 @@ from composer.utils import MissingConditionalImportError, dist, get_file
 from datasets import Dataset as HFDataset
 from datasets import IterableDataset, load_dataset
 from torch.utils.data import DataLoader, Dataset
+from transformers import PreTrainedTokenizerBase
 
 from llmfoundry import registry
 from llmfoundry.eval.datasets.utils import (
@@ -830,9 +831,9 @@ class InContextLearningGenerationTaskWithAnswersDataset(
             if k in self.static_keys:
                 chunked[k] = [v] * num_chunks
 
-        batched_list = [{k: v[idx]
-                         for k, v in chunked.items()}
-                        for idx in range(num_chunks)]
+        batched_list = [{
+            k: v[idx] for k, v in chunked.items()
+        } for idx in range(num_chunks)]
         return batched_list
 
 
@@ -1218,9 +1219,9 @@ class InContextLearningMultipleChoiceTaskDataset(InContextLearningDataset):
             if k in self.static_keys:
                 chunked[k] = [v] * num_chunks
 
-        return [{k: v[idx]
-                 for k, v in chunked.items()}
-                for idx in range(num_chunks)]
+        return [{
+            k: v[idx] for k, v in chunked.items()
+        } for idx in range(num_chunks)]
 
 
 class InContextLearningSchemaTaskDataset(
@@ -1626,8 +1627,7 @@ def partition_dataset_by_category(
 def get_icl_task_dataloader(
     icl_task_type: str,
     dataset_uri: str,
-    tokenizer: Union[transformers.PreTrainedTokenizer,
-                     transformers.PreTrainedTokenizerFast],
+    tokenizer: PreTrainedTokenizerBase,
     batch_size: int,
     has_categories: bool = False,
     hf_loading_vars: Optional[dict] = None,

@@ -1,6 +1,5 @@
 # Copyright 2022 MosaicML LLM Foundry authors
 # SPDX-License-Identifier: Apache-2.0
-
 """Build a StreamingTextDataset dataset and dataloader for training."""
 
 import inspect
@@ -203,7 +202,7 @@ class StreamingTextDataset(StreamingDataset):
                 'If tokenizing on-the-fly, tokenizer must have a pad_token_id',
             )
 
-        return self.tokenizer(
+        return self.tokenizer(  # type: ignore
             text_sample['text'],
             truncation=True,
             padding='max_length',
@@ -291,7 +290,9 @@ class ConcatenatedSequenceCollatorWrapper:
         return torch.cat([left_zeros, cumulative_sep[:, :-1]], dim=1)
 
 
-def build_streams(streams: Optional[dict[str, Any]] = None,):
+def build_streams(
+    streams: Optional[dict[str, Any]] = None,
+):
     streams_dict = streams
     # build streams
     streams_ret = []
@@ -301,7 +302,7 @@ def build_streams(streams: Optional[dict[str, Any]] = None,):
 
 
 def build_text_dataloader(
-    tokenizer: PreTrainedTokenizerBase,
+    tokenizer: Optional[PreTrainedTokenizerBase],
     device_batch_size: Union[int, float],
     dataset: dict[str, Any],
     drop_last: bool,
@@ -311,6 +312,8 @@ def build_text_dataloader(
     persistent_workers: bool = True,
     timeout: int = 0,
 ) -> DataSpec:
+    if tokenizer is None:
+        raise ValueError('Tokenizer is required for text dataloader')
 
     dataset_cfg = dataset
 
@@ -335,7 +338,9 @@ def build_text_dataloader(
         StreamingTextDataset,
     ).parameters
 
-    valid_base_dataset_params = inspect.signature(StreamingDataset,).parameters
+    valid_base_dataset_params = inspect.signature(
+        StreamingDataset,
+    ).parameters
 
     dataset_config_subset_for_streaming_text_dataset = {
         k: v

@@ -12,6 +12,7 @@ from typing import Any, Callable, ContextManager, Literal, Optional, Union
 from unittest.mock import MagicMock, mock_open, patch
 
 import catalogue
+import datasets as hf_datasets
 import numpy as np
 import pytest
 import torch
@@ -26,7 +27,11 @@ from transformers import PreTrainedTokenizerBase
 from llmfoundry.command_utils import convert_dataset_hf
 from llmfoundry.command_utils.data_prep.convert_finetuning_dataset import \
     get_columns_and_format
-from llmfoundry.data import build_dataloader, build_finetuning_dataloader
+from llmfoundry.data import (
+    build_dataloader,
+    build_finetuning_dataloader,
+    build_pairs_dataloader,
+)
 from llmfoundry.data.finetuning.collator import (
     validate_target_settings,
 )
@@ -129,6 +134,7 @@ def build_mock_ft_streaming_dataset(
         ) as output_writer:
             for sample in dataset:
                 if pretokenize:
+                    assert tokenizer is not None
                     sample = tokenize_formatted_example(
                         sample,
                         tokenizer=tokenizer,
@@ -164,6 +170,7 @@ def build_mock_ft_streaming_dataset(
     ) as output_writer:
         for sample in dataset:
             if pretokenize:
+                assert tokenizer is not None
                 sample = tokenize_formatted_example(sample, tokenizer=tokenizer)
                 sample_to_write = {'turns': []}
                 for turn in sample['turns']:
@@ -183,12 +190,13 @@ def build_mock_ft_streaming_dataset(
                 output_writer.write(encoded_sample)
 
 
-@pytest.mark.parametrize('tokenizer_name', ['gpt2', 'facebook/opt-125m'])
+@pytest.mark.parametrize('tokenizer_name', ['gpt2', 'huggyllama/llama-7b'])
 @pytest.mark.parametrize('pretokenize', [False, True])
 def test_correct_padding(
     tokenizer_name: str,
     pretokenize: bool,
     request: pytest.FixtureRequest,
+    tiny_text_hf_dataset: hf_datasets.Dataset,
     batch_size: int = 4,
 ):
     if tokenizer_name == 'gpt2' and not pretokenize:
@@ -200,41 +208,54 @@ def test_correct_padding(
     bos_text = ''
     if tokenizer_name == 'gpt2':
         eos_text = '<|endoftext|>'
-    elif tokenizer_name == 'facebook/opt-125m':
+    elif tokenizer_name == 'huggyllama/llama-7b':
         bos_text = '</s>'
 
     path = get_abs_data_path(data_local)
     shutil.rmtree(path, ignore_errors=True)
-    if pretokenize:
-        convert_dataset_hf(
-            dataset='allenai/c4',
-            data_subset='en',
-            splits=[split],
-            out_root=path,
-            compression=None,
-            concat_tokens=2048,
-            tokenizer=tokenizer_name,
-            tokenizer_kwargs={},
-            bos_text=bos_text,
-            eos_text=eos_text,
-            no_wrap=False,
-            num_workers=None,
-        )
-    else:
-        convert_dataset_hf(
-            dataset='allenai/c4',
-            data_subset='en',
-            splits=[split],
-            out_root=path,
-            compression=None,
-            concat_tokens=None,
-            tokenizer=tokenizer_name,
-            tokenizer_kwargs={},
-            bos_text=bos_text,
-            eos_text=eos_text,
-            no_wrap=False,
-            num_workers=None,
-        )
+
+    concat_length = 128
+
+    with patch('datasets.load_dataset') as mock_load_dataset:
+        mock_load_dataset.return_value = tiny_text_hf_dataset
+
+        if pretokenize:
+            with patch('llmfoundry.command_utils.data_prep.convert_dataset_hf.build_tokenizer') as mock_build_tokenizer:
+                tokenizer = get_tokenizer_fixture_by_name(request, tokenizer_name)
+                mock_build_tokenizer.return_value = tokenizer
+
+                convert_dataset_hf(
+                    dataset='allenai/c4',
+                    data_subset='en',
+                    splits=[split],
+                    out_root=path,
+                    compression=None,
+                    concat_tokens=concat_length,
+                    tokenizer=tokenizer_name,
+                    tokenizer_kwargs={},
+                    bos_text=bos_text,
+                    eos_text=eos_text,
+                    no_wrap=False,
+                    num_workers=None,
+                )
+                mock_build_tokenizer.assert_called_once()
+        else:
+            convert_dataset_hf(
+                dataset='allenai/c4',
+                data_subset='en',
+                splits=[split],
+                out_root=path,
+                compression=None,
+                concat_tokens=None,
+                tokenizer=None,
+                tokenizer_kwargs={},
+                bos_text=bos_text,
+                eos_text=eos_text,
+                no_wrap=False,
+                num_workers=None,
+            )
+
+        mock_load_dataset.assert_called_once()
     if not os.path.isdir(path):
         raise RuntimeError(f'allenai/c4 dataset at {path} not set up as expected')
 
@@ -249,9 +270,12 @@ def test_correct_padding(
     })
 
     tokenizer = get_tokenizer_fixture_by_name(request, tokenizer_name)
+    if not pretokenize and tokenizer_name == 'huggyllama/llama-7b':
+        tokenizer.pad_token = tokenizer.eos_token
 
     # Dataloaders
     test_cfg.eval_loader.pop('name')
+    test_cfg.eval_loader.dataset.max_seq_len = concat_length
     assert isinstance(test_cfg, DictConfig)
     test_cfg = to_dict_container(test_cfg)
     eval_loader = build_text_dataloader(
@@ -261,7 +285,7 @@ def test_correct_padding(
     ).dataloader
     batch = next(iter(eval_loader))
 
-    assert batch['input_ids'].shape == torch.Size([batch_size, 2048])
+    assert batch['input_ids'].shape == torch.Size([batch_size, concat_length])
     assert batch['input_ids'].type() == 'torch.LongTensor'
 
     # we follow the convention (from huggingface) that non-attended tokens are 0 in the attn mask and -100 in the labels
@@ -1212,7 +1236,7 @@ def test_token_counting_func_dataloader_setting(
         safe_load: bool = False,
         max_seq_len: int = 2048,
         preprocessing_fn: Optional[Callable] = None,
-        tokenizer: transformers.PreTrainedTokenizerBase = None,
+        tokenizer: Optional[transformers.PreTrainedTokenizerBase] = None,
         target_prompts: str = 'last',
         target_responses: str = 'none',
         decoder_only_format: bool = True,
@@ -1557,3 +1581,18 @@ def test_text_dataloader_with_extra_keys(tiny_gpt2_tokenizer: PreTrainedTokenize
                 tokenizer=tokenizer,
                 device_batch_size=device_batch_size,
             ).dataloader
+
+
+@pytest.mark.parametrize(
+        'build_fn',
+        [build_finetuning_dataloader, build_text_dataloader, build_pairs_dataloader])
+def test_tokenizer_none(build_fn: Callable):
+    params = {
+        'device_batch_size': 2,
+        'dataset': {},
+        'num_workers': 0,
+        'drop_last': False,
+    }
+
+    with pytest.raises(ValueError, match='Tokenizer is required'):
+        _ = build_fn(tokenizer=None, **params)

@@ -54,7 +54,7 @@ _ALLOWED_DATASET_KEYS = {
 
 
 def build_finetuning_dataloader(
-    tokenizer: PreTrainedTokenizerBase,
+    tokenizer: Optional[PreTrainedTokenizerBase],
     device_batch_size: Union[int, float],
     dataset: dict[str, Any],
     num_workers: int,
@@ -179,6 +179,9 @@ def build_finetuning_dataloader(
         padding/waste rates for different `cfg.dataset.packing_ratio` choices,
         given a starting workload YAML.
     """
+    if tokenizer is None:
+        raise ValueError('Tokenizer is required for finetuning dataloader')
+
     dataset_cfg = dataset
     is_streaming = (
         dataset_cfg.get('remote') is not None or
@@ -700,12 +703,14 @@ def build_collate_fn(
             'On-the-fly packing is currently only supported for decoder-only formats.',
         )
 
+    pad_id = tokenizer.pad_token_id
+    assert isinstance(pad_id, int)
     collate_fn = BinPackCollator(
         collator=collate_fn,
         target_batch_size=device_batch_size,
         max_seq_len=max_seq_len,
-        pad_token_id=tokenizer.pad_token_id,
-        padding_side=tokenizer.padding_side,
+        pad_token_id=pad_id,
+        padding_side=tokenizer.padding_side,  # type: ignore
         max_leftover_bins_to_keep=max_leftover_bins_to_keep,
     )
     n_examples_to_pack = int(device_batch_size * packing_ratio)
@@ -843,9 +848,8 @@ if __name__ == '__main__':
                     print(
                         '\033[91m{}\033[00m\n'.format('TARGET:   '),
                         tokenizer.decode(
-                            batch['input_ids']
-                            [j,
-                             batch['labels'][j] != CROSS_ENTROPY_IGNORE_INDEX],
+                            batch['input_ids'][j, batch['labels'][j] !=
+                                               CROSS_ENTROPY_IGNORE_INDEX],
                             skip_special_tokens=False,
                             clean_up_tokenization_spaces=True,
                         ),

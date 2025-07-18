@@ -3,7 +3,6 @@
 
 # Copyright 2022 MosaicML Composer authors & Flower Labs
 # SPDX-License-Identifier: Apache-2.0
-
 """Monitor activation values during training."""
 
 import warnings

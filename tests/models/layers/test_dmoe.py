@@ -171,7 +171,9 @@ def test_dmoe(
         # Copy mb_dmoe's parameters to torch_dmoe
         mb_dmoe_state_dict = get_model_state_dict(
             mb_dmoe,
-            options=StateDictOptions(full_state_dict=True,),
+            options=StateDictOptions(
+                full_state_dict=True,
+            ),
         )
         for key, t in mb_dmoe_state_dict.items():
             if key in tp_names:
@@ -186,7 +188,9 @@ def test_dmoe(
         mb_dmoe.experts = DDP(mb_dmoe.experts, device_ids=[rank])
         mb_dmoe_state_dict = get_model_state_dict(
             mb_dmoe,
-            options=StateDictOptions(full_state_dict=True,),
+            options=StateDictOptions(
+                full_state_dict=True,
+            ),
         )
     mb_dmoe_optimizer = optim.SGD(mb_dmoe.parameters(), lr=0.1)
 
@@ -214,7 +218,9 @@ def test_dmoe(
 @pytest.mark.gpu
 @pytest.mark.world_size(2)
 @pytest.mark.parametrize('two_d_input', [True, False])
-def test_dmoe_defaults(two_d_input: bool,):
+def test_dmoe_defaults(
+    two_d_input: bool,
+):
     rank = dist.get_rank()
     fp16 = False
     bf16 = True
@@ -256,7 +262,9 @@ def test_dmoe_defaults(two_d_input: bool,):
     mb_dmoe.experts = DDP(mb_dmoe.experts, device_ids=[rank])
     mb_dmoe_state_dict = get_model_state_dict(
         mb_dmoe,
-        options=StateDictOptions(full_state_dict=True,),
+        options=StateDictOptions(
+            full_state_dict=True,
+        ),
     )
     mb_dmoe_optimizer = optim.SGD(mb_dmoe.parameters(), lr=0.1)
 

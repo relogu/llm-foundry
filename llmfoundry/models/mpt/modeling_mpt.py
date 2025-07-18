@@ -1,6 +1,5 @@
 # Copyright 2022 MosaicML LLM Foundry authors
 # SPDX-License-Identifier: Apache-2.0
-
 """A simple, flexible implementation of a GPT model.
 
 Inspired by https://github.com/karpathy/minGPT/blob/master/mingpt/model.py
@@ -233,7 +232,24 @@ def gen_attention_mask_in_length(
             ```.
             (The description above is taken verbatim from https://github.com/Dao-AILab/flash-attention/blob/9356a1c0389660d7e231ff3163c1ac17d9e3824a/flash_attn/bert_padding.py#L125 .)
     """
+    return _get_attn_mask_in_len_seq_one_hot(
+        sequence_id,
+        S,
+        attn_uses_sequence_id,
+        attn_impl,
+        attention_mask,
+    )[0]
+
+
+def _get_attn_mask_in_len_seq_one_hot(
+    sequence_id: Union[None, torch.Tensor],
+    S: int,
+    attn_uses_sequence_id: bool,
+    attn_impl: str,
+    attention_mask: Union[torch.Tensor, None],
+):
     attention_mask_in_length = None
+    sequence_id_one_hot = None
     if (sequence_id
         is not None) and attn_uses_sequence_id and (attn_impl == 'flash'):
         # Check if sequence has left padding. If yes, raise an error.
@@ -251,13 +267,14 @@ def gen_attention_mask_in_length(
             # We replace those -1 with 0 to prevent `torch.nn.functional.one_hot(sequence_id)` in the next line from failing.
             # We apply the attention mask again after the one_hot operation.
             sequence_id = sequence_id.masked_fill(~attention_mask, 0)
-        attention_mask_in_length = torch.nn.functional.one_hot(sequence_id)
+        sequence_id_one_hot = torch.nn.functional.one_hot(sequence_id)
         if attention_mask is not None:
-            attention_mask_in_length = attention_mask_in_length.masked_fill(
+            sequence_id_one_hot = sequence_id_one_hot.masked_fill(
                 ~attention_mask.unsqueeze(-1),
                 0,
             )
-        attention_mask_in_length = attention_mask_in_length.sum(dim=1)
+
+        attention_mask_in_length = sequence_id_one_hot.sum(dim=1)
         attention_mask_in_length = torch.nn.functional.pad(
             attention_mask_in_length,
             (0, S - attention_mask_in_length.shape[-1]),
@@ -265,7 +282,32 @@ def gen_attention_mask_in_length(
             value=0,
         )
 
-    return attention_mask_in_length
+    return attention_mask_in_length, sequence_id_one_hot
+
+
+def gen_sequence_id_info(
+    sequence_id: Union[None, torch.Tensor],
+    S: int,
+    attn_uses_sequence_id: bool,
+    attn_impl: str,
+    attention_mask: Union[torch.Tensor, None],
+    device: Union[torch.device, str],
+):
+    attention_mask_in_length, sequence_id_one_hot = _get_attn_mask_in_len_seq_one_hot(
+        sequence_id,
+        S,
+        attn_uses_sequence_id,
+        attn_impl,
+        attention_mask,
+    )
+
+    if sequence_id_one_hot is not None:
+        pos_id_within_seq = sequence_id_one_hot.cumsum(dim=1)
+        pos_id_within_seq = sequence_id_one_hot * pos_id_within_seq
+        pos_id_within_seq = pos_id_within_seq.sum(dim=-1) - 1
+        return attention_mask_in_length, pos_id_within_seq
+
+    return None, torch.arange(S, device=device)[None, :]
 
 
 def gen_flash_attn_padding_info(
@@ -353,7 +395,7 @@ class LlamaRotaryEmbeddingFoundry(LlamaRotaryEmbedding):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         # In this subclass, we move `inv_freq` to same device as position_ids. This operation should be a no-op during training.
         # This is done to fix pipeline parallel generation using hf.generate. Please see this comment for details: https://github.com/mosaicml/llm-foundry/pull/1334#issue-2387337525
-        self.inv_freq = self.inv_freq.to(position_ids.device)
+        self.inv_freq = self.inv_freq.to(position_ids.device)  # type: ignore
         return super().forward(x=x, position_ids=position_ids)
 
 
@@ -418,7 +460,9 @@ class MPTModel(MPTPreTrainedModel):
         self.mb_args = None
         self.shift_labels = True
 
-        self.blocks = self.construct_blocks(config=config,)
+        self.blocks = self.construct_blocks(
+            config=config,
+        )
 
         # Tag all modules in the transformer blocks with the corresponding block_idx and max_block_idx
         for i, block in enumerate(self.blocks):
@@ -497,8 +541,8 @@ class MPTModel(MPTPreTrainedModel):
             nn.ModuleList: The list of Transformer blocks.
         """
         block_args = self.extract_block_args(config.to_dict())
-        self.kv_cache_layers = set()
-        self.blocks_fuse_norm_attn_norm = block_args.get(
+        self.kv_cache_layers = set()  # type: ignore
+        self.blocks_fuse_norm_attn_norm = block_args.get(  # type: ignore
             'fuse_norm_attn_norm',
             False,
         )
@@ -899,8 +943,11 @@ class MPTModel(MPTPreTrainedModel):
                 if attention_mask is not None:
                     # adjust the position indices to account for padding tokens
                     pos = torch.clamp(
-                        pos - torch.cumsum((~attention_mask).to(torch.int32),
-                                           dim=1)[:, past_position:,],
+                        pos -
+                        torch.cumsum((~attention_mask).to(torch.int32), dim=1)[
+                            :,
+                            past_position:,
+                        ],
                         min=0,
                     )
                 if self.learned_pos_emb:
@@ -935,12 +982,13 @@ class MPTModel(MPTPreTrainedModel):
             attention_mask=attention_mask,
             sequence_id=sequence_id,
         )
-        attention_mask_in_length = gen_attention_mask_in_length(
+        attention_mask_in_length, pos_id_within_seq = gen_sequence_id_info(
             sequence_id=sequence_id,
             S=S,
             attn_uses_sequence_id=self.attn_uses_sequence_id,
             attn_impl=self.attn_impl,
             attention_mask=attention_mask,
+            device=x.device,
         )
 
         alibi_slopes = None  # alibi_slopes will only be used by flash attention for ALiBi
@@ -994,6 +1042,8 @@ class MPTModel(MPTPreTrainedModel):
             extra_kwargs = {}
             if prev_layer_key_value is not None:
                 extra_kwargs['prev_layer_key_value'] = prev_layer_key_value
+            if pos_id_within_seq is not None:
+                extra_kwargs['pos_id_within_seq'] = pos_id_within_seq
             x, attn_weights, present = block(
                 x,
                 past_key_value=past_key_value,
@@ -1027,7 +1077,7 @@ class MPTModel(MPTPreTrainedModel):
 
         return BaseModelOutputWithPast(
             last_hidden_state=x,
-            past_key_values=presents,
+            past_key_values=presents,  # type: ignore
             hidden_states=all_hidden_states,
             attentions=all_self_attns,
         )
@@ -1063,6 +1113,10 @@ class MPTModel(MPTPreTrainedModel):
 
 
 class MPTForCausalLM(MPTPreTrainedModel):
+    # Copied these from LlamaForCausalLM
+    _tied_weights_keys = ['lm_head.weight']
+    _tp_plan = {'lm_head': 'colwise_rep'}
+    _pp_plan = {'lm_head': (['hidden_states'], ['logits'])}
 
     def __init__(self, config: MPTConfig):
         super().__init__(config)
@@ -1216,8 +1270,8 @@ class MPTForCausalLM(MPTPreTrainedModel):
             )
 
         return CausalLMOutputWithPast(
-            loss=loss,
-            logits=logits,
+            loss=loss,  # type: ignore
+            logits=logits,  # type: ignore
             past_key_values=outputs.past_key_values,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
@@ -1343,7 +1397,8 @@ class MPTForCausalLM(MPTPreTrainedModel):
     ) -> list[tuple[torch.Tensor, ...]]:
         """Used by HuggingFace generate when using beam search with kv-caching.
 
-        See https://github.com/huggingface/transformers/blob/3ec7a47664ebe40c40f4b722f6bb1cd30c3821ec/src/transformers/models/gpt2/modeling_gpt2.py#L1122-L1133
+        See
+        https://github.com/huggingface/transformers/blob/3ec7a47664ebe40c40f4b722f6bb1cd30c3821ec/src/transformers/models/gpt2/modeling_gpt2.py#L1122-L1133
         for an example in transformers.
         """
         reordered_past = []
@@ -1372,15 +1427,15 @@ def compute_loss_from_logits(
     targets = get_targets(labels) if shift_labels else labels
 
     losses = loss_fn(
-        outputs.logits.view(-1, outputs.logits.size(-1)),
+        outputs.logits.view(-1, outputs.logits.size(-1)),  # type: ignore
         targets.view(-1),
     )
 
     if torch.all(targets == loss_fn.ignore_index):  # type: ignore
         loss = losses.sum()
     else:
-        loss = losses.sum() / (targets !=
-                               loss_fn.ignore_index).sum()  # type: ignore
+        loss = losses.sum() / (targets
+                               != loss_fn.ignore_index).sum()  # type: ignore
 
     return loss
 
@@ -1418,7 +1473,7 @@ class ComposerMPTCausalLM(HuggingFaceModel):
 
         super().__init__(
             model=model,
-            tokenizer=tokenizer,
+            tokenizer=tokenizer,  # type: ignore
             use_logits=True,
             metrics=train_metrics,
             eval_metrics=eval_metrics,
@@ -1500,7 +1555,9 @@ class ComposerMPTCausalLM(HuggingFaceModel):
                 raise RuntimeError(
                     'Requirements for MegaBlocks not installed; see install instructions in `README.md`.',
                 )
-            lbl = batched_load_balancing_loss(self.model.transformer.mb_args)
+            lbl = batched_load_balancing_loss(
+                self.model.transformer.mb_args,  # type: ignore
+            )  # type: ignore
             return {
                 'total': loss + lbl,
                 'loss': loss,
@@ -1523,7 +1580,7 @@ class ComposerMPTCausalLM(HuggingFaceModel):
         # that the dataset has been constructed without padding. Additionally, we
         # assume the backward pass is approximately 2x the forward pass
 
-        if self.model.config.block_overrides is not None:
+        if self.model.config.block_overrides is not None:  # type: ignore[reportGeneralTypeIssues]
             warnings.warn(
                 'Warning, flop computation is not supported when using block overrides. Returning 0 flops per batch.',
             )
@@ -1546,6 +1603,11 @@ class ComposerMPTCausalLM(HuggingFaceModel):
             attn_flops (int): The attention flops.
         """
         return (
-            self.model.config.n_layers * 2 * 2 *
-            (self.model.config.d_model * (msl**2))
+            self.model.config.n_layers
+            *  # type: ignore[reportGeneralTypeIssues]
+            2 * 2 * (
+                self.model.config.
+                d_model  # type: ignore[reportGeneralTypeIssues]
+                * (msl**2)
+            )
         )

@@ -17,7 +17,6 @@ from composer.core.precision import Precision, get_precision_context
 from composer.distributed.dist_strategy import prepare_fsdp_module
 from composer.models.huggingface import (
     HuggingFaceModel,
-    maybe_get_underlying_model,
 )
 from composer.optim import DecoupledAdamW
 from composer.utils import (
@@ -780,49 +779,6 @@ def test_loss_reduction(
             ), f'differed at step {i}'
 
 
-@pytest.mark.parametrize(
-    'peft_config',
-    [
-        None,
-        {
-            'peft_type': 'LORA',
-            'task_type': 'CAUSAL_LM',
-        },
-    ],
-)
-def test_opt_wrapping(
-    peft_config: Optional[dict[str, str]],
-    tiny_opt_tokenizer: PreTrainedTokenizerBase,
-):
-    if peft_config is not None:
-        _ = pytest.importorskip('peft')
-
-    conf: dict[str, dict[str, Any]] = {
-        'model': {
-            'name': 'hf_causal_lm',
-            'pretrained_model_name_or_path': 'facebook/opt-125m',
-            'pretrained': False,
-        },
-        'tokenizer': {
-            'name': 'facebook/opt-125m',
-        },
-    }
-    if peft_config is not None:
-        conf['model']['peft_config'] = peft_config
-
-    tokenizer = tiny_opt_tokenizer
-
-    conf['model'].pop('name')
-    model = ComposerHFCausalLM(**conf['model'], tokenizer=tokenizer)
-
-    # check that all the modules we except are blocked from FSDP wrapping
-    underlying_model = maybe_get_underlying_model(model.model)
-    assert not underlying_model.model._fsdp_wrap
-    assert not underlying_model.model.decoder._fsdp_wrap
-    assert not underlying_model.model.decoder.embed_tokens._fsdp_wrap
-    assert not underlying_model.lm_head._fsdp_wrap
-
-
 def test_lora_id():
     peft = pytest.importorskip('peft')
 
@@ -1513,7 +1469,7 @@ def test_generate(
             max_new_tokens=5,
             use_cache=False,
         )
-        assert batched_generation.shape == (2, 6 + 5)
+        assert batched_generation.shape == (2, 6 + 5)  # type: ignore
 
         generation_with_left_padding = mpt.generate(
             input_ids=left_padding_input_ids,
@@ -1521,14 +1477,14 @@ def test_generate(
             max_new_tokens=5,
             use_cache=False,
         )
-        assert generation_with_left_padding.shape == (2, 6 + 5)
+        assert generation_with_left_padding.shape == (2, 6 + 5)  # type: ignore
         generation_with_no_padding = mpt.generate(
             input_ids=no_padding_input_ids,
             attention_mask=no_padding_attention_mask,
             max_new_tokens=5,
             use_cache=False,
         )
-        assert generation_with_no_padding.shape == (2, 3 + 5)
+        assert generation_with_no_padding.shape == (2, 3 + 5)  # type: ignore
 
         # check that left padding and no padding produce the same output
         assert generation_with_no_padding[:, 3:].equal(
@@ -1612,8 +1568,8 @@ def test_generate_with_device_map(
 
     pipe = pipeline(
         'text-generation',
-        model=save_path,
-        tokenizer=tiny_neox_tokenizer,
+        model=str(save_path),
+        tokenizer=tiny_neox_tokenizer,  # type: ignore
         torch_dtype=torch.bfloat16,
         trust_remote_code=True,
         device_map=device_map,
@@ -2107,10 +2063,10 @@ def test_generate_with_past_kv(
             autospec=True,
         ) as forward_mocked:
             forward_mocked.return_value = CausalLMOutputWithPast(
-                logits=composer_device.tensor_to_device(
+                logits=composer_device.tensor_to_device(  # type: ignore
                     torch.randn((1, 3, hf_config.vocab_size)),
                 ),
-                past_key_values=[(
+                past_key_values=[(  # type: ignore
                     torch.randn(1, 3, hf_config.d_model),
                     torch.randn(1, 3, hf_config.d_model),
                 ) for _ in range(hf_config.n_layers)],
@@ -2540,7 +2496,7 @@ def test_hf_init(
         False,
     )
 
-    model = HuggingFaceModel(model, tokenizer)
+    model = HuggingFaceModel(model, tokenizer)  # type: ignore
 
     batch = gen_random_batch(batch_size, test_cfg)
 
@@ -2588,7 +2544,7 @@ def test_head_dim_8_flash_mqa_attn(
 
     mpt = MPTForCausalLM(hf_config)
 
-    model = HuggingFaceModel(mpt, tokenizer, shift_labels=True)
+    model = HuggingFaceModel(mpt, tokenizer, shift_labels=True)  # type: ignore
 
     model = model.to(test_cfg.device)
     batch = gen_random_batch(batch_size, test_cfg)
