@@ -772,6 +772,9 @@ def build_icl_evaluators(
                             label=f'{label}/{category}',
                             dataloader=dataloaders[category],
                             metric_names=metric_names,
+                            subset_num_batches=icl_subset_num_batches,
+                            device_eval_microbatch_size=
+                            device_eval_microbatch_size,
                         ),
                     )
             else:
