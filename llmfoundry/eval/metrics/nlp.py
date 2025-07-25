@@ -337,14 +337,14 @@ class InContextLearningMultipleChoiceAccuracy(InContextLearningMetric):
         assert isinstance(self.total, Tensor)
 
         perplexities = []
-        for batch_idx, cont_idx in enumerate(batch['continuation_indices']):
+        for sample_idx, cont_idx in enumerate(batch['continuation_indices']):
             # continuation indices refer to indices in the original input's token space
-            cont_tok_logits = outputs[batch_idx].index_select(
+            cont_tok_logits = outputs[sample_idx].index_select(
                 dim=0,
                 index=cont_idx - 1,
             )
             # labels have been shifted left by one index, so the cont_idx needs to be shifted as well.
-            cont_tok_targ = labels[batch_idx].index_select(
+            cont_tok_targ = labels[sample_idx].index_select(
                 dim=0,
                 index=cont_idx - 1,
             )
@@ -357,7 +357,11 @@ class InContextLearningMultipleChoiceAccuracy(InContextLearningMetric):
             batch['choice_groupings'],
             batch['gold_indices'],
         ):
-            subset = perplexities[start:end]
+            # NOTE: With automicrobatchsize enabled, the indices may have been generated
+            # for a bigger batch thus needing to be wrapped around
+            start_idx = start % outputs.shape[0]
+            end_idx = end % outputs.shape[0]
+            subset = perplexities[start_idx:end_idx]
             idx_min = subset.index(min(subset))
 
             if idx_min == gold_idx:
@@ -369,18 +373,18 @@ class InContextLearningMultipleChoiceAccuracy(InContextLearningMetric):
             question = batch['input_ids'][
                 start][:batch['continuation_indices'][start][0]]
 
-            correct_choice = batch['input_ids'][start:end][gold_idx][
-                batch['continuation_indices'][start:end][gold_idx][0]:
-                batch['continuation_indices'][start:end][gold_idx][-1] + 1]
-            selected_choice = batch['input_ids'][start:end][idx_min][
-                batch['continuation_indices'][start:end][idx_min][0]:
-                batch['continuation_indices'][start:end][idx_min][-1] + 1]
+            correct_choice = batch['input_ids'][start_idx:end_idx][gold_idx][
+                batch['continuation_indices'][start_idx:end_idx][gold_idx][0]:
+                batch['continuation_indices'][start_idx:end_idx][gold_idx][-1] + 1]
+            selected_choice = batch['input_ids'][start_idx:end_idx][idx_min][
+                batch['continuation_indices'][start_idx:end_idx][idx_min][0]:
+                batch['continuation_indices'][start_idx:end_idx][idx_min][-1] + 1]
             metric_result_dict['context'].append(question)
             metric_result_dict['correct_choice'].append(correct_choice)
             metric_result_dict['correct_choice_idx'].append(gold_idx)
             metric_result_dict['selected_choice'].append(selected_choice)
             metric_result_dict['selected_choice_idx'].append(idx_min)
-            all_choices = batch['input_ids'][start:end]
+            all_choices = batch['input_ids'][start_idx:end_idx]
             # Unpads the choices. Necessary in case different choices have different token lengths.
             if 'attention_mask' in batch:
                 all_choices_list = [
@@ -505,7 +509,9 @@ class InContextLearningMCExpectedCalibrationError(
             batch['choice_groupings'],
             batch['gold_indices'],
         ):
-            subset = probabilities[start:end]
+            # NOTE: With automicrobatchsize enabled, the indices may have been generated
+            # for a bigger batch thus needing to be wrapped around
+            subset = probabilities[start % outputs.shape[0]:end % outputs.shape[0]]
             idx_max = subset.index(max(subset))
             confidence = torch.tensor(subset).max() / torch.tensor(subset).sum()
 
