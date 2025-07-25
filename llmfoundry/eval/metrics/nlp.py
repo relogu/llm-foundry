@@ -362,6 +362,11 @@ class InContextLearningMultipleChoiceAccuracy(InContextLearningMetric):
             start_idx = start % outputs.shape[0]
             end_idx = end % outputs.shape[0]
             subset = perplexities[start_idx:end_idx]
+            if not subset:
+                log.warning(
+                    'No perplexities found for the current choice grouping. This may indicate that the model did not produce any outputs for this batch. If automicrobatching is enabled, it may also mean that this multiple choice sample has been split into two subsequent microbatches. If this occurs often, it is recommended to set manually the batch size as this may impact the results of the evaluation.'
+                )
+                continue
             idx_min = subset.index(min(subset))
 
             if idx_min == gold_idx:
@@ -512,6 +517,11 @@ class InContextLearningMCExpectedCalibrationError(
             # NOTE: With automicrobatchsize enabled, the indices may have been generated
             # for a bigger batch thus needing to be wrapped around
             subset = probabilities[start % outputs.shape[0]:end % outputs.shape[0]]
+            if not subset:
+                log.warning(
+                    'No perplexities found for the current choice grouping. This may indicate that the model did not produce any outputs for this batch. If automicrobatching is enabled, it may also mean that this multiple choice sample has been split into two subsequent microbatches. If this occurs often, it is recommended to set manually the batch size as this may impact the results of the evaluation.'
+                )
+                continue
             idx_max = subset.index(max(subset))
             confidence = torch.tensor(subset).max() / torch.tensor(subset).sum()
 
