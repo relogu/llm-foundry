@@ -1141,6 +1141,7 @@ class InContextLearningMultipleChoiceTaskDataset(InContextLearningDataset):
         Returns:
             Dict: Dictionary for a single batch
         """
+        # TODO(Lorenzo): Address the case where we would like the number of choices is not a power of two and automicrobathing could break samples into different microbatches.
         batch = copy.deepcopy(self.base_batch)
         for data_pair in data:
             choice_start_idx = len(batch['continuation_indices'])
