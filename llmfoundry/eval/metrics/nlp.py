@@ -1,6 +1,7 @@
 # Copyright 2024 MosaicML LLM Foundry authors
 # SPDX-License-Identifier: Apache-2.0
 """A collection of common torchmetrics for NLP tasks."""
+from __future__ import annotations
 
 import copy
 import functools
@@ -217,10 +218,12 @@ class InContextLearningGenerationExactMatchAccuracy(InContextLearningMetric):
 class InContextLearningLMAccuracy(InContextLearningMetric):
     r"""Computes accuracy for In-context learning language modeling tasks.
 
-    ICL LM tasks consist of some number of example language modeling tasks (referred to as the 'context'), followed by a test task where the model must correctly predict all the tokens
+    ICL LM tasks consist of some number of example language modeling tasks (referred to as the
+    'context'), followed by a test task where the model must correctly predict all the tokens
     following tokens in some passage (referred to as the 'continuation').
 
-    For example, the model may be provided the context below and evaluated on its ability to correctly predict the continuation. Note: it doesn't matter
+    For example, the model may be provided the context below and evaluated on its ability to correctly
+    predict the continuation. Note: it doesn't matter
     whether the model correctly predicts the context tokens.
 
     Context: `The dog is->fuzzy\nthe water is->hot\nthe tree is->`
@@ -330,11 +333,115 @@ class InContextLearningMultipleChoiceAccuracy(InContextLearningMetric):
             'all_choices': [],
             'result': [],
         }
+        self.leftover_buffer: dict[str, Any] = {}
+
+    def _update_metric_result_dict(
+        self,
+        subset: list[float],
+        gold_idx: int,
+        question: Tensor,
+        correct_choice: Tensor,
+        selected_choice: Tensor,
+        all_choices_list: list[Tensor] | None,
+        metric_result_dict: dict[str, list[Any]],
+    ):
+        idx_min = subset.index(min(subset))
+
+        if idx_min == gold_idx:
+            self.correct += torch.tensor(1.0)
+            metric_result_dict['result'].append(1)
+        else:
+            metric_result_dict['result'].append(0)
+
+        metric_result_dict['context'].append(question)
+        metric_result_dict['correct_choice'].append(correct_choice)
+        metric_result_dict['correct_choice_idx'].append(gold_idx)
+        metric_result_dict['selected_choice'].append(selected_choice)
+        metric_result_dict['selected_choice_idx'].append(idx_min)
+        # Unpads the choices. Necessary in case different choices have different token lengths.
+        if all_choices_list:
+            metric_result_dict['all_choices'].append(all_choices_list)
+
+        self.total += torch.tensor(1.0)
+
+    def _clear_leftover_buffer(self):
+        """Explicitly clear the leftover buffer and free memory"""
+        if hasattr(self, 'leftover_buffer') and self.leftover_buffer:
+            buffer_keys = list(self.leftover_buffer.keys())
+            for key in buffer_keys:
+                del self.leftover_buffer[key]
+            # Only call empty_cache() when necessary to avoid overhead
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+    @staticmethod
+    def _shift_choice_groupings(
+        choice_groupings: list[tuple[int, int]], shift_tuple: tuple[int, int],
+    ) -> list[tuple[int, int]]:
+        new_choice_groupings = [shift_tuple]
+        for start, end in choice_groupings:
+            new_choice_groupings.append((start + shift_tuple[0], end + shift_tuple[1]))
+        return new_choice_groupings
 
     def update(self, batch: dict, outputs: torch.Tensor, labels: torch.Tensor):
 
         assert isinstance(self.correct, Tensor)
         assert isinstance(self.total, Tensor)
+
+        # NOTE: We add the leftover only if it is not empty and we are using the same microbatch size as the previous one.
+        # This is to ensure that we are not adding leftover samples from a previous microbatch that failed and may overlap
+        # with the current one.
+        if self.leftover_buffer and self.leftover_buffer.get('batch_size', 0) == outputs.shape[0]:
+            log.debug(
+                'Adding leftover samples from the previous microbatch to the current batch.',
+            )
+            # Move data from CPU back to GPU using non-blocking transfers for better performance
+            device = batch['input_ids'].device
+            
+            # Need to append to the left of the batch as if they are new samples in the batch
+            leftover_input_ids = self.leftover_buffer['input_ids'].to(device, non_blocking=True)
+            batch['input_ids'] = torch.cat(
+                (leftover_input_ids, batch['input_ids']),
+                dim=0,
+            )
+            
+            leftover_continuation_indices = [c_idx.to(device, non_blocking=True) for c_idx in self.leftover_buffer['continuation_indices']]
+            batch['continuation_indices'] = (
+                leftover_continuation_indices +
+                batch['continuation_indices']
+            )
+            
+            if 'attention_mask' in self.leftover_buffer:
+                leftover_attention_mask = self.leftover_buffer['attention_mask'].to(device, non_blocking=True)
+                batch['attention_mask'] = torch.cat(
+                    (leftover_attention_mask, batch['attention_mask']),
+                    dim=0,
+                )
+            batch['gold_indices'] = (
+                [self.leftover_buffer['gold_indices']] +
+                batch['gold_indices']
+            )
+            
+            leftover_outputs = self.leftover_buffer['outputs'].to(device, non_blocking=True)
+            outputs = torch.cat(
+                (leftover_outputs, outputs),
+                dim=0,
+            )
+            
+            leftover_labels = self.leftover_buffer['labels'].to(device, non_blocking=True)
+            labels = torch.cat(
+                (leftover_labels, labels),
+                dim=0,
+            )
+            
+            # The choice groupings must shift to the right by the second element in the tuple
+            batch['choice_groupings'] = self._shift_choice_groupings(
+                batch['choice_groupings'],
+                self.leftover_buffer['choice_groupings'],
+            )
+            
+        # Clear the leftover buffer and free memory explicitly
+        self._clear_leftover_buffer()
 
         perplexities = []
         for sample_idx, cont_idx in enumerate(batch['continuation_indices']):
@@ -357,48 +464,55 @@ class InContextLearningMultipleChoiceAccuracy(InContextLearningMetric):
             batch['choice_groupings'],
             batch['gold_indices'],
         ):
-            # NOTE: With automicrobatchsize enabled, the indices may have been generated
-            # for a bigger batch thus needing to be wrapped around
-            start_idx = start % outputs.shape[0]
-            end_idx = end % outputs.shape[0]
+            # NOTE: In case we are running this benchmark with auto_microbatching, the
+            # collate function have constructed this indices with the original full
+            # batch size. As such, some indices may be wrong and go beyond the length of
+            # the perplexities list. To solve this issue, it is sufficient to apply the
+            # modulus of the current microbatch size on the indices
+            start_idx = start % len(perplexities)
+            end_idx = end % len(perplexities)
             subset = perplexities[start_idx:end_idx]
             if not subset:
                 log.warning(
-                    'No perplexities found for the current choice grouping. This may indicate that the model did not produce any outputs for this batch. If automicrobatching is enabled, it may also mean that this multiple choice sample has been split into two subsequent microbatches. If this occurs often, it is recommended to set manually the batch size as this may impact the results of the evaluation.'
+                    'No perplexities found for the current choice grouping. If automicrobatching is enabled, it may mean that this multiple choice sample has been split into two subsequent microbatches. This can occur only for the last subset of samples in the microbatch unless the microbatch size is too small (in which case the experiments is eventually going to crash). To solve this issue, the current samples are stored in a leftover buffer to be added on the left of the next microbatch.',
                 )
+                # Drop leftover samples to a buffer for the next iteration
+                # Store on CPU with pinned memory to minimize GPU VRAM impact
+                self.leftover_buffer = {
+                    'input_ids': batch['input_ids'][start_idx:].detach().cpu().pin_memory(),
+                    'continuation_indices': [c_idx.detach().cpu().pin_memory() for c_idx in batch['continuation_indices'][start_idx:]],
+                    'outputs': outputs[start_idx:].detach().cpu().pin_memory(),
+                    'labels': labels[start_idx:].detach().cpu().pin_memory(),
+                    'choice_groupings': (0, end - start),
+                    'gold_indices': gold_idx,
+                    'batch_size': outputs.shape[0],
+                }
+                if 'attention_mask' in batch:
+                    self.leftover_buffer['attention_mask'] = batch['attention_mask'][start_idx:].detach().cpu().pin_memory()
                 continue
-            idx_min = subset.index(min(subset))
-
-            if idx_min == gold_idx:
-                self.correct += torch.tensor(1.0)
-                metric_result_dict['result'].append(1)
-            else:
-                metric_result_dict['result'].append(0)
-
-            question = batch['input_ids'][
-                start][:batch['continuation_indices'][start][0]]
-
-            correct_choice = batch['input_ids'][start_idx:end_idx][gold_idx][
-                batch['continuation_indices'][start_idx:end_idx][gold_idx][0]:
-                batch['continuation_indices'][start_idx:end_idx][gold_idx][-1] + 1]
-            selected_choice = batch['input_ids'][start_idx:end_idx][idx_min][
-                batch['continuation_indices'][start_idx:end_idx][idx_min][0]:
-                batch['continuation_indices'][start_idx:end_idx][idx_min][-1] + 1]
-            metric_result_dict['context'].append(question)
-            metric_result_dict['correct_choice'].append(correct_choice)
-            metric_result_dict['correct_choice_idx'].append(gold_idx)
-            metric_result_dict['selected_choice'].append(selected_choice)
-            metric_result_dict['selected_choice_idx'].append(idx_min)
-            all_choices = batch['input_ids'][start_idx:end_idx]
-            # Unpads the choices. Necessary in case different choices have different token lengths.
-            if 'attention_mask' in batch:
-                all_choices_list = [
+            
+            self._update_metric_result_dict(
+                subset=subset,
+                gold_idx=gold_idx,
+                question=batch['input_ids'][start_idx][:batch['continuation_indices'][start_idx][0]],
+                correct_choice=batch['input_ids'][
+                        start_idx:end_idx
+                    ][
+                        gold_idx
+                    ][
+                    batch['continuation_indices'][start_idx:end_idx][gold_idx][0]:
+                    batch['continuation_indices'][start_idx:end_idx][gold_idx][-1] + 1
+                ],
+                selected_choice=batch['input_ids'][start_idx:end_idx][subset.index(min(subset))][
+                    batch['continuation_indices'][start_idx:end_idx][subset.index(min(subset))][0]:
+                    batch['continuation_indices'][start_idx:end_idx][subset.index(min(subset))][-1] + 1
+                ],
+                all_choices_list=None if 'attention_mask' not in batch else [
                     choice[batch['attention_mask'][i]]
-                    for i, choice in enumerate(all_choices)
-                ]
-                metric_result_dict['all_choices'].append(all_choices_list)
-
-            self.total += torch.tensor(1.0)
+                    for i, choice in enumerate(batch['input_ids'][start_idx:end_idx])
+                ],
+                metric_result_dict=metric_result_dict,
+            )
 
         # Don't return all_choices if we didn't fill it up (i.e. didn't use causal lms)
         if metric_result_dict['all_choices'] == []:
@@ -487,11 +601,88 @@ class InContextLearningMCExpectedCalibrationError(
 
     # Make torchmetrics call update only once
     full_state_update = False
+    
+    # Initialize the leftover buffer to store samples that were not processed in the current microbatch
+    leftover_buffer: dict[str, Any] = {}
+
+    def _clear_leftover_buffer(self):
+        """Explicitly clear the leftover buffer and free memory"""
+        if hasattr(self, 'leftover_buffer') and self.leftover_buffer:
+            buffer_keys = list(self.leftover_buffer.keys())
+            for key in buffer_keys:
+                del self.leftover_buffer[key]
+            # Only call empty_cache() when necessary to avoid overhead
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+    @staticmethod
+    def _shift_choice_groupings(
+        choice_groupings: list[tuple[int, int]], shift_tuple: tuple[int, int],
+    ) -> list[tuple[int, int]]:
+        new_choice_groupings = [shift_tuple]
+        for start, end in choice_groupings:
+            new_choice_groupings.append((start + shift_tuple[0], end + shift_tuple[1]))
+        return new_choice_groupings
 
     def update(self, batch: dict, outputs: torch.Tensor, labels: torch.Tensor):
 
-        assert isinstance(self.bucket_correct, Tensor)
-        assert isinstance(self.bucket_totals, Tensor)
+        assert isinstance(self.correct, Tensor)
+        assert isinstance(self.total, Tensor)
+
+        # NOTE: We add the leftover only if it is not empty and we are using the same microbatch size as the previous one.
+        # This is to ensure that we are not adding leftover samples from a previous microbatch that failed and may overlap
+        # with the current one.
+        if self.leftover_buffer and self.leftover_buffer.get('batch_size', 0) == outputs.shape[0]:
+            log.debug(
+                'Adding leftover samples from the previous microbatch to the current batch.',
+            )
+            # Move data from CPU back to GPU using non-blocking transfers for better performance
+            device = batch['input_ids'].device
+            
+            # Need to append to the left of the batch as if they are new samples in the batch
+            leftover_input_ids = self.leftover_buffer['input_ids'].to(device, non_blocking=True)
+            batch['input_ids'] = torch.cat(
+                (leftover_input_ids, batch['input_ids']),
+                dim=0,
+            )
+            
+            leftover_continuation_indices = [c_idx.to(device, non_blocking=True) for c_idx in self.leftover_buffer['continuation_indices']]
+            batch['continuation_indices'] = (
+                leftover_continuation_indices +
+                batch['continuation_indices']
+            )
+            
+            if 'attention_mask' in self.leftover_buffer:
+                leftover_attention_mask = self.leftover_buffer['attention_mask'].to(device, non_blocking=True)
+                batch['attention_mask'] = torch.cat(
+                    (leftover_attention_mask, batch['attention_mask']),
+                    dim=0,
+                )
+            batch['gold_indices'] = (
+                [self.leftover_buffer['gold_indices']] +
+                batch['gold_indices']
+            )
+            
+            leftover_outputs = self.leftover_buffer['outputs'].to(device, non_blocking=True)
+            outputs = torch.cat(
+                (leftover_outputs, outputs),
+                dim=0,
+            )
+            
+            leftover_labels = self.leftover_buffer['labels'].to(device, non_blocking=True)
+            labels = torch.cat(
+                (leftover_labels, labels),
+                dim=0,
+            )
+            
+            # The choice groupings must shift to the right by the second element in the tuple
+            batch['choice_groupings'] = self._shift_choice_groupings(
+                batch['choice_groupings'],
+                self.leftover_buffer['choice_groupings'],
+            )
+            
+        # Clear the leftover buffer and free memory explicitly
+        self._clear_leftover_buffer()
 
         outputs = torch.softmax(outputs, dim=2)
         probabilities = []
@@ -516,11 +707,24 @@ class InContextLearningMCExpectedCalibrationError(
         ):
             # NOTE: With automicrobatchsize enabled, the indices may have been generated
             # for a bigger batch thus needing to be wrapped around
-            subset = probabilities[start % outputs.shape[0]:end % outputs.shape[0]]
+            start_idx = start % len(probabilities)
+            end_idx = end % len(probabilities)
+            subset = probabilities[start_idx:end_idx]
             if not subset:
                 log.warning(
-                    'No perplexities found for the current choice grouping. This may indicate that the model did not produce any outputs for this batch. If automicrobatching is enabled, it may also mean that this multiple choice sample has been split into two subsequent microbatches. If this occurs often, it is recommended to set manually the batch size as this may impact the results of the evaluation.'
+                    'No perplexities found for the current choice grouping. This may indicate that the model did not produce any outputs for this batch. If automicrobatching is enabled, it may also mean that this multiple choice sample has been split into two subsequent microbatches. If this occurs often, it is recommended to set manually the batch size as this may impact the results of the evaluation.',
                 )
+                # Drop leftover samples to a buffer for the next iteration
+                # Store on CPU with pinned memory to minimize GPU VRAM impact
+                self.leftover_buffer = {
+                    'input_ids': batch['input_ids'][start_idx:].detach().cpu().pin_memory(),
+                    'continuation_indices': [c_idx.detach().cpu().pin_memory() for c_idx in batch['continuation_indices'][start_idx:]],
+                    'outputs': outputs[start_idx:].detach().cpu().pin_memory(),
+                    'labels': labels[start_idx:].detach().cpu().pin_memory(),
+                    'choice_groupings': (0, end - start),
+                    'gold_indices': gold_idx,
+                    'batch_size': outputs.shape[0],
+                }
                 continue
             idx_max = subset.index(max(subset))
             confidence = torch.tensor(subset).max() / torch.tensor(subset).sum()
@@ -531,12 +735,9 @@ class InContextLearningMCExpectedCalibrationError(
                 bucket_idx -= 1
 
             if idx_max == gold_idx:
-                self.bucket_correct[
-                    bucket_idx
-                ] += 1  # pyright: ignore [reportGeneralTypeIssues]
+                self.bucket_correct[bucket_idx] += 1
 
-            self.bucket_totals[
-                bucket_idx] += 1  # pyright: ignore [reportGeneralTypeIssues]
+            self.bucket_totals[bucket_idx] += 1
 
 
 class InContextLearningLMExpectedCalibrationError(
