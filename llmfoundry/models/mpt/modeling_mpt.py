@@ -151,7 +151,9 @@ def gen_rotary_embedding(
             interleaved=False,
             scale_base=rope_dail_config['xpos_scale_base'] if
             (rope_dail_config['type'] == 'xpos') else None,
-            pos_idx_in_fp32=rope_dail_config['pos_idx_in_fp32'],
+            # NOTE: For some reason this is not necessary anymore, and to support the latest versions
+            # of Tri Dao's RoPE, we must not pass it: https://github.com/Dao-AILab/flash-attention/commit/1870a0dc0285266c83ff2effbcc2a383cc4ee8c7
+            # pos_idx_in_fp32=rope_dail_config['pos_idx_in_fp32'],
             device=
             'cpu',  # FSDP does not materialize modules with meta buffers, hence device is set to cpu
         )
