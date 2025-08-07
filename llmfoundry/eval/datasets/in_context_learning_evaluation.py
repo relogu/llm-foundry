@@ -274,8 +274,9 @@ class InContextLearningDataset(Dataset):
                 )
         else:
             with dist.local_rank_zero_download_and_wait(destination_path):
-                if dist.get_local_rank() == 0:
-                    get_file(dataset_uri, destination_path, overwrite=True)
+                # NOTE: This should prevent multiple concurrent runs operating on the same file system to crash
+                if dist.get_local_rank() == 0 and not os.path.exists(destination_path):
+                    get_file(dataset_uri, destination_path, overwrite=False)
             dataset = load_dataset(
                 'json',
                 data_files=destination_path,
@@ -1583,7 +1584,8 @@ def partition_dataset_by_category(
             )
     else:
         with dist.local_rank_zero_download_and_wait(destination_path):
-            if dist.get_local_rank() == 0:
+            # NOTE: This should prevent multiple concurrent runs operating on the same file system to crash
+            if dist.get_local_rank() == 0 and not os.path.exists(destination_path):
                 get_file(dataset_uri, destination_path, overwrite=True)
         dataset = load_dataset(
             'json',
