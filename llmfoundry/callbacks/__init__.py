@@ -18,6 +18,7 @@ from composer.callbacks import (
     RuntimeEstimator,
     SpeedMonitor,
     SystemMetricsMonitor,
+    GradMonitor
 )
 
 from llmfoundry.callbacks.activation_monitor_full_model import \
@@ -47,6 +48,7 @@ from llmfoundry.callbacks.run_timeout_callback import RunTimeoutCallback
 from llmfoundry.callbacks.scheduled_gc_callback import ScheduledGarbageCollector
 from llmfoundry.registry import callbacks, callbacks_with_config
 
+callbacks.register('grad_monitor', func=GradMonitor)
 callbacks.register('system_metrics_monitor', func=SystemMetricsMonitor)
 callbacks.register('lr_monitor', func=LRMonitor)
 callbacks.register('memory_monitor', func=MemoryMonitor)
